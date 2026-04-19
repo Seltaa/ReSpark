@@ -1,0 +1,5 @@
+.respark_config.json
+respark_temp_*.json
+respark_temp_*.py
+__pycache__/
+*.pyc
