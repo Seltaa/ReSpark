@@ -263,7 +263,7 @@ Make sure your HuggingFace token has **Write** permission and is set in ReSpark 
 - [x] Auto GGUF conversion
 - [x] Auto pod termination
 - [x] HuggingFace auto-upload
-- [ ] Extended thinking removal (pre-processing)
+- [x] Extended thinking removal (pre-processing)
 - [ ] Local GPU support
 - [ ] GUI version (v2)
 
