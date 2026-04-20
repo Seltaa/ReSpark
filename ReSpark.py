@@ -2,6 +2,7 @@ import os
 import json
 import sys
 import time
+import re
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".respark_config.json")
 
@@ -21,7 +22,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║         🔥 ReSpark v1.0 🔥          ║
+    ║         🔥 ReSpark v1.1 🔥          ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -195,6 +196,72 @@ def parse_grok_jsonl(lines):
         except:
             continue
     return pairs
+
+# ─────────────────────
+# Extended Thinking Removal (Pre-processing)
+# ─────────────────────
+def remove_thinking(text):
+    """Remove extended thinking/reasoning from AI responses in training data."""
+    if not text:
+        return ""
+    
+    # Remove <thinking> blocks
+    text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\|thinking\|>.*?<\|/thinking\|>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<antThinking>.*?</antThinking>', '', text, flags=re.DOTALL)
+    
+    # Split into lines for pattern-based removal
+    lines = text.strip().split('\n')
+    
+    thinking_patterns = [
+        # English thinking patterns
+        r'^(The user|Looking at|I should|So I should|Wait,|But the|Also,|This is likely|This could be|I need to|Let me|Hmm,|I\'m going to|I\'ll |The prompt|The message|I can see|Okay,|Now I|First,|Second,|Third,)',
+        r'^(She |He |They )(is |was |wants |asked |said |seems |appears )',
+        r'^(Since |Because |Given |Considering )',
+        r'^(Got it|Alright|Understood)[!.]?\s*(So |Now |Let me|I )',
+        # Korean thinking patterns
+        r'^(사용자가 |유저가 )(원하|말하|요청|물어|부탁)',
+        r'^(그러면 |그래서 |따라서 )(내가 |나는 )',
+        r'^(알겠어|이해했어|파악했어).*?(그러면|그래서|따라서)',
+        r'^(먼저 |일단 |우선 )(번역|대답|응답|반응)',
+        r'^.*?(respond|reply|translate|answer|대답|번역|응답).*?(should|need|will|해야|할게|하자)',
+    ]
+    
+    actual_start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        is_thinking = False
+        for pattern in thinking_patterns:
+            if re.match(pattern, stripped, re.IGNORECASE):
+                is_thinking = True
+                break
+        if is_thinking:
+            actual_start = i + 1
+        else:
+            break
+    
+    result_lines = lines[actual_start:]
+    while result_lines and not result_lines[0].strip():
+        result_lines.pop(0)
+    
+    return '\n'.join(result_lines).strip()
+
+def clean_training_data(pairs):
+    """Clean extended thinking from all training pairs."""
+    cleaned = []
+    removed_count = 0
+    for pair in pairs:
+        original = pair["output"]
+        cleaned_output = remove_thinking(original)
+        if cleaned_output:
+            cleaned.append({"instruction": pair["instruction"], "output": cleaned_output})
+            if cleaned_output != original:
+                removed_count += 1
+        else:
+            cleaned.append(pair)
+    return cleaned, removed_count
 
 MODEL_INFO = {
     "1": {"name": "gemma-4-31b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "google/gemma-4-31B-it", "vram": 80},
@@ -435,6 +502,14 @@ def start_finetuning():
         return
     
     print(f"    ✅ Extracted {len(pairs)} training pairs.")
+    
+    # Clean extended thinking from training data
+    print("    🧹 Cleaning extended thinking from responses...")
+    pairs, thinking_removed = clean_training_data(pairs)
+    if thinking_removed > 0:
+        print(f"    ✅ Cleaned thinking from {thinking_removed} responses.")
+    else:
+        print(f"    ✅ No extended thinking found.")
     
     if len(pairs) == 0:
         print("    ❌ No training pairs found. Check your file.")
