@@ -565,12 +565,13 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             name="respark-finetune",
             image_name="runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04",
             gpu_type_id=model_info['gpu'],
+            cloud_type="SECURE",
             volume_in_gb=200,
             container_disk_in_gb=200,
             ports="22/tcp",
         )
         pod_id = pod["id"]
-        print(f"    ✅ Pod created: {pod_id}")
+        print(f"    ✅ Pod created: {pod_id} (On-Demand)")
     except Exception as e:
         print(f"    ❌ Failed to create pod: {e}")
         input("\n    Press Enter to go back...")
@@ -702,9 +703,19 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             if hf_repo:
                 print(f"    Uploading to {hf_repo}...")
                 run_ssh_command(ssh, f"hf upload {hf_repo} /root/model-q5_k_m.gguf 2>&1")
-                print(f"    ✅ Uploaded to https://huggingface.co/{hf_repo}")
-                print(f"\n    To download later, run:")
-                print(f'    python -c "from huggingface_hub import hf_hub_download; hf_hub_download(\'{hf_repo}\', \'model-q5_k_m.gguf\', local_dir=\'D:\\\\\')"')
+                
+                # Verify upload
+                print("    🔍 Verifying upload on HuggingFace...")
+                verify_output = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
+                
+                if "VERIFIED" in verify_output:
+                    print(f"    ✅ Upload verified! File exists on https://huggingface.co/{hf_repo}")
+                else:
+                    print(f"    ⚠️ Upload may not have completed. Please check https://huggingface.co/{hf_repo}")
+                    print(f"    If the file is missing, you can manually upload with:")
+                    print(f"    huggingface-cli upload {hf_repo} /root/model-q5_k_m.gguf --token YOUR_TOKEN")
+                    print(f"\n    ⚠️ Do NOT press Enter until the file is confirmed on HuggingFace!")
+                    input("\n    Press Enter only after confirming the file exists on HuggingFace...")
             else:
                 print("    ⚠️ No repo name given. Skipping upload.")
                 print(f"    Pod ID: {pod_id} - download manually before terminating!")
@@ -713,7 +724,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             print(f"    Pod ID: {pod_id} - download manually before terminating!")
         
     except Exception as e:
-        print(f"    ❌ Download failed: {e}")
+        print(f"    ❌ Upload failed: {e}")
         print(f"    Pod ID: {pod_id} (files still on pod)")
         input("\n    Press Enter to go back...")
         return
