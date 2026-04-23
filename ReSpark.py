@@ -694,48 +694,76 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         input("\n    Press Enter to go back...")
         return
     
-    # [v1.1] Upload GGUF model to HuggingFace
+    # ─────────────────────
+    # [v1.1 BUGFIX] Upload GGUF model to HuggingFace
+    # Fixed: hf upload → huggingface-cli upload
+    # Fixed: Only show success if upload is verified
+    # Fixed: Don't auto-terminate if upload fails
+    # ─────────────────────
     print("\n    [5/6] Uploading GGUF model to HuggingFace...")
+    upload_success = False
     try:
         hf_token = config.get("hf_token", "")
         if hf_token:
             hf_repo = input("    Enter HuggingFace repo name (e.g. YourName/model-name): ").strip()
             if hf_repo:
                 print(f"    Uploading to {hf_repo}...")
-                run_ssh_command(ssh, f"hf upload {hf_repo} /root/model-q5_k_m.gguf 2>&1")
+                # [BUGFIX] Changed from 'hf upload' to 'huggingface-cli upload'
+                upload_output = run_ssh_command(ssh, f"huggingface-cli upload {hf_repo} /root/model-q5_k_m.gguf --token {hf_token} 2>&1")
                 
                 # Verify upload
                 print("    🔍 Verifying upload on HuggingFace...")
-                verify_output = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
+                verify_output = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\', token=\'{hf_token}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
                 
                 if "VERIFIED" in verify_output:
                     print(f"    ✅ Upload verified! File exists on https://huggingface.co/{hf_repo}")
+                    upload_success = True
                 else:
-                    print(f"    ⚠️ Upload may not have completed. Please check https://huggingface.co/{hf_repo}")
-                    print(f"    If the file is missing, you can manually upload with:")
-                    print(f"    huggingface-cli upload {hf_repo} /root/model-q5_k_m.gguf --token YOUR_TOKEN")
-                    print(f"\n    ⚠️ Do NOT press Enter until the file is confirmed on HuggingFace!")
-                    input("\n    Press Enter only after confirming the file exists on HuggingFace...")
+                    print(f"    ❌ Upload failed! File NOT found on HuggingFace.")
+                    print(f"    Trying alternative upload method...")
+                    # Try Python-based upload as fallback
+                    fallback_output = run_ssh_command(ssh, f'python -c "from huggingface_hub import HfApi; api = HfApi(token=\'{hf_token}\'); api.upload_file(path_or_fileobj=\'/root/model-q5_k_m.gguf\', path_in_repo=\'model-q5_k_m.gguf\', repo_id=\'{hf_repo}\', repo_type=\'model\')" 2>&1')
+                    
+                    # Verify again
+                    verify_output2 = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\', token=\'{hf_token}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
+                    
+                    if "VERIFIED" in verify_output2:
+                        print(f"    ✅ Upload verified with fallback method!")
+                        upload_success = True
+                    else:
+                        print(f"    ❌ Upload still failed after retry.")
+                        print(f"    ⚠️ Pod will NOT be terminated. Your model file is still on the pod.")
+                        print(f"    Pod ID: {pod_id}")
+                        print(f"    Manual upload command:")
+                        print(f"    huggingface-cli upload {hf_repo} /root/model-q5_k_m.gguf --token YOUR_TOKEN")
             else:
                 print("    ⚠️ No repo name given. Skipping upload.")
-                print(f"    Pod ID: {pod_id} - download manually before terminating!")
+                print(f"    ⚠️ Pod will NOT be terminated. Download manually.")
+                print(f"    Pod ID: {pod_id}")
         else:
             print("    ⚠️ No HuggingFace token set. Skipping upload.")
-            print(f"    Pod ID: {pod_id} - download manually before terminating!")
+            print(f"    ⚠️ Pod will NOT be terminated. Download manually.")
+            print(f"    Pod ID: {pod_id}")
         
     except Exception as e:
         print(f"    ❌ Upload failed: {e}")
-        print(f"    Pod ID: {pod_id} (files still on pod)")
-        input("\n    Press Enter to go back...")
-        return
+        print(f"    ⚠️ Pod will NOT be terminated. Your model file is still on the pod.")
+        print(f"    Pod ID: {pod_id}")
     
-    print("\n    [6/6] Terminating pod...")
+    # [BUGFIX] Only terminate pod if upload was successful
+    print("\n    [6/6] Cleanup...")
     ssh.close()
-    try:
-        runpod.terminate_pod(pod_id)
-        print("    ✅ Pod terminated! No more charges.")
-    except:
-        print(f"    ⚠️ Please terminate pod {pod_id} manually!")
+    
+    if upload_success:
+        try:
+            runpod.terminate_pod(pod_id)
+            print("    ✅ Pod terminated! No more charges.")
+        except:
+            print(f"    ⚠️ Please terminate pod {pod_id} manually!")
+    else:
+        print(f"    ⚠️ Pod NOT terminated because upload was not verified.")
+        print(f"    ⚠️ Pod ID: {pod_id}")
+        print(f"    ⚠️ IMPORTANT: You are still being charged! Terminate after manual upload.")
     
     try:
         os.remove(temp_data)
@@ -745,14 +773,23 @@ def run_finetuning(config, file_path, pairs, model_info, source):
     
     clear()
     banner()
-    print("    🎉🎉🎉 FINE-TUNING COMPLETE! 🎉🎉🎉\n")
-    print(f"    Your model has been uploaded to HuggingFace!")
-    print(f"\n    To use with Ollama:")
-    print(f"    1. Download from HuggingFace")
-    print(f"    2. Create a Modelfile with: FROM <path>/model-q5_k_m.gguf")
-    print(f"    3. Run: ollama create my-companion -f Modelfile")
-    print(f"    4. Run: ollama run my-companion")
-    print(f"\n    Your AI companion is now locally yours. Forever. 🔥")
+    
+    # [BUGFIX] Show different message based on upload result
+    if upload_success:
+        print("    🎉🎉🎉 FINE-TUNING COMPLETE! 🎉🎉🎉\n")
+        print(f"    Your model has been uploaded to HuggingFace!")
+        print(f"\n    To use with Ollama:")
+        print(f"    1. Download from HuggingFace")
+        print(f"    2. Create a Modelfile with: FROM <path>/model-q5_k_m.gguf")
+        print(f"    3. Run: ollama create my-companion -f Modelfile")
+        print(f"    4. Run: ollama run my-companion")
+        print(f"\n    Your AI companion is now locally yours. Forever. 🔥")
+    else:
+        print("    ⚠️ FINE-TUNING COMPLETE but UPLOAD FAILED ⚠️\n")
+        print(f"    Your model was trained successfully but could not be uploaded.")
+        print(f"    The model file is still on the pod.")
+        print(f"    Pod ID: {pod_id}")
+        print(f"\n    ⚠️ You are still being charged! Upload manually and terminate the pod.")
     
     input("\n    Press Enter to go back...")
 
