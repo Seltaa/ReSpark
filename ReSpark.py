@@ -794,7 +794,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         # [v1.4.2] Install llama.cpp (v1.0 method)
         print("    Installing llama.cpp for GGUF conversion...")
         run_ssh_command(ssh, f"cd {WORK_DIR} && git clone https://github.com/ggml-org/llama.cpp 2>&1 | tail -3")
-        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && pip install -r requirements/requirements-convert_hf_to_gguf.txt 2>&1 | tail -5")
+        run_ssh_command(ssh, "pip install gguf 2>&1 | tail -3")
         run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -5")
         run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -5")
         print("    ✅ llama.cpp installed!")
