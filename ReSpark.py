@@ -29,7 +29,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║         🔥 ReSpark v1.3 🔥          ║
+    ║         🔥 ReSpark v1.4 🔥          ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -285,8 +285,9 @@ def select_model():
     return MODEL_INFO.get(choice, None)
 
 # ─────────────────────
-# [v1.2] Training Script Generator
-# ALL paths use /workspace/ for persistence
+# [v1.4] Training Script Generator
+# Uses save_pretrained_gguf for Ollama-compatible GGUF
+# No more manual llama.cpp quantization!
 # ─────────────────────
 def generate_training_script(model_info, data_path):
     script = f'''
@@ -370,91 +371,64 @@ except Exception as e:
     print(f"[ERROR] Training failed: {{e}}")
     sys.exit(1)
 
-# ─── Post-training: Merge & Convert (all on /workspace/) ───
+# ─── [v1.4] Post-training: Direct GGUF export via unsloth ───
+# Uses unsloth's built-in save_pretrained_gguf which produces
+# Ollama-compatible GGUF files. No manual llama.cpp needed!
 
-print("[STEP] Saving merged model...")
-if not check_disk(40, "merge model"):
+print("[STEP] Exporting to Ollama-compatible GGUF (q5_k_m)...")
+print("[STEP] This uses unsloth's built-in converter for maximum compatibility.")
+if not check_disk(30, "GGUF export"):
     sys.exit(1)
 try:
-    model.save_pretrained_merged(f"{{WORK}}/gguf_model", tokenizer)
-    print("[STEP] Merged model saved!")
+    model.save_pretrained_gguf(
+        f"{{WORK}}/gguf_export",
+        tokenizer,
+        quantization_method="q5_k_m",
+    )
+    print("[STEP] GGUF export complete!")
 except Exception as e:
-    print(f"[ERROR] Failed to save merged model: {{e}}")
+    print(f"[ERROR] GGUF export failed: {{e}}")
+    print("[STEP] Trying q8_0 as fallback...")
+    try:
+        model.save_pretrained_gguf(
+            f"{{WORK}}/gguf_export",
+            tokenizer,
+            quantization_method="q8_0",
+        )
+        print("[STEP] q8_0 GGUF export complete! (fallback)")
+    except Exception as e2:
+        print(f"[ERROR] Fallback also failed: {{e2}}")
+        sys.exit(1)
+
+# Find the exported GGUF file and rename it
+import glob
+gguf_files = glob.glob(f"{{WORK}}/gguf_export/*.gguf")
+if not gguf_files:
+    # Sometimes unsloth saves directly as a file, not in a folder
+    gguf_files = glob.glob(f"{{WORK}}/gguf_export*q5*") + glob.glob(f"{{WORK}}/gguf_export*q8*") + glob.glob(f"{{WORK}}/gguf_export*.gguf")
+
+if gguf_files:
+    src = gguf_files[0]
+    dst = f"{{WORK}}/model-q5_k_m.gguf"
+    if src != dst:
+        shutil.copy2(src, dst)
+    file_size = os.path.getsize(dst) / (1024**3)
+    print(f"[STEP] Final GGUF: {{file_size:.1f}}GB")
+else:
+    print("[ERROR] No GGUF file found after export!")
+    print("[DEBUG] Contents of /workspace/gguf_export/:")
+    for f in os.listdir(f"{{WORK}}/gguf_export"):
+        fpath = os.path.join(f"{{WORK}}/gguf_export", f)
+        fsize = os.path.getsize(fpath) / (1024**3)
+        print(f"  {{f}} ({{fsize:.1f}}GB)")
     sys.exit(1)
 
-print("[STEP] Freeing disk space...")
+# Cleanup
 try:
-    if os.path.exists("/root/.cache/huggingface"):
-        shutil.rmtree("/root/.cache/huggingface")
     if os.path.exists(f"{{WORK}}/output"):
         shutil.rmtree(f"{{WORK}}/output")
-    print("[STEP] Disk space freed!")
-except Exception as e:
-    print(f"[WARN] Cleanup partial: {{e}}")
-
-print("[STEP] Converting to bf16 GGUF...")
-if not check_disk(30, "bf16 conversion"):
-    sys.exit(1)
-try:
-    # [v1.3] Remove torchvision to prevent circular import error
-    subprocess.run(["pip", "uninstall", "torchvision", "-y"], capture_output=True)
-    # [v1.3] Ensure transformers is up to date for Gemma 4 support
-    subprocess.run(["pip", "install", "--upgrade", "transformers"], capture_output=True)
-    convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
-    result = subprocess.run(
-        ["python", convert_script,
-         f"{{WORK}}/gguf_model",
-         "--outfile", f"{{WORK}}/model-bf16.gguf",
-         "--outtype", "bf16"],
-        capture_output=True, text=True, timeout=3600
-    )
-    if result.returncode != 0:
-        print(f"[WARN] bf16 stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
-        os.system(f"python {{convert_script}} {{WORK}}/gguf_model --outfile {{WORK}}/model-bf16.gguf --outtype bf16")
-    if not os.path.exists(f"{{WORK}}/model-bf16.gguf"):
-        print("[ERROR] bf16 GGUF file not created!")
-        sys.exit(1)
-    bf16_size = os.path.getsize(f"{{WORK}}/model-bf16.gguf") / (1024**3)
-    print(f"[STEP] bf16 GGUF created! ({{bf16_size:.1f}}GB)")
-except Exception as e:
-    print(f"[ERROR] bf16 conversion failed: {{e}}")
-    sys.exit(1)
-
-print("[STEP] Removing merged model to free space...")
-try:
-    if os.path.exists(f"{{WORK}}/gguf_model"):
-        shutil.rmtree(f"{{WORK}}/gguf_model")
-    print("[STEP] Merged model removed!")
-except Exception as e:
-    print(f"[WARN] Cleanup partial: {{e}}")
-
-print("[STEP] Quantizing to q5_k_m...")
-if not check_disk(15, "q5_k_m quantization"):
-    sys.exit(1)
-try:
-    quantize_bin = f"{{WORK}}/llama.cpp/build/bin/llama-quantize"
-    result = subprocess.run(
-        [quantize_bin,
-         f"{{WORK}}/model-bf16.gguf",
-         f"{{WORK}}/model-q5_k_m.gguf",
-         "q5_k_m"],
-        capture_output=True, text=True, timeout=3600
-    )
-    if result.returncode != 0:
-        print(f"[WARN] quantize stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
-    if not os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
-        print("[ERROR] q5_k_m GGUF file not created!")
-        sys.exit(1)
-    q5_size = os.path.getsize(f"{{WORK}}/model-q5_k_m.gguf") / (1024**3)
-    print(f"[STEP] q5_k_m GGUF created! ({{q5_size:.1f}}GB)")
-except Exception as e:
-    print(f"[ERROR] Quantization failed: {{e}}")
-    sys.exit(1)
-
-try:
-    if os.path.exists(f"{{WORK}}/model-bf16.gguf"):
-        os.remove(f"{{WORK}}/model-bf16.gguf")
-        print("[STEP] bf16 file cleaned up!")
+    if os.path.exists("/root/.cache/huggingface"):
+        shutil.rmtree("/root/.cache/huggingface")
 except:
     pass
 
@@ -672,6 +646,7 @@ def start_finetuning():
     print(f"    Model:  {model_info['name']}")
     print(f"    GPU:    {model_info['gpu_label']}")
     print(f"    Cost:   {model_info['cost']}")
+    print(f"    GGUF:   Ollama-compatible (via unsloth)")
     print(f"\n    ⚠️ WARNING: Pressing Start will create a RunPod instance.")
     print(f"    You will be charged {model_info['cost']} to your RunPod account.")
     print(f"\n    1. Start")
@@ -766,6 +741,8 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         return
 
     # [4/6] Install & Train
+    # [v1.4] No more llama.cpp installation needed!
+    # unsloth handles GGUF conversion internally.
     print("\n    [4/6] Installing dependencies & training...")
     print("    (This will take 3-5 hours for 31B)\n")
 
@@ -781,15 +758,9 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         run_ssh_command(ssh, "pip install --upgrade unsloth_zoo --no-deps 2>&1 | tail -3")
         run_ssh_command(ssh, "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub 2>&1 | tail -5")
         run_ssh_command(ssh, "pip install --upgrade transformers 2>&1 | tail -3")
+        # [v1.4] Uninstall torchvision to prevent circular import
+        run_ssh_command(ssh, "pip uninstall torchvision -y 2>&1 | tail -3")
         print("    ✅ All packages installed!")
-        
-        # [v1.2] Install llama.cpp to /workspace/ for GGUF conversion
-        print("    Installing llama.cpp for GGUF conversion...")
-        run_ssh_command(ssh, f"cd {WORK_DIR} && git clone https://github.com/ggml-org/llama.cpp 2>&1 | tail -3")
-        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && pip install -r requirements/requirements-convert_hf_to_gguf.txt 2>&1 | tail -5")
-        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -5")
-        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -5")
-        print("    ✅ llama.cpp installed!")
 
         hf_token = config.get("hf_token", "")
         if hf_token:
