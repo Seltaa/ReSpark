@@ -396,8 +396,9 @@ print("[STEP] Converting to bf16 GGUF...")
 if not check_disk(30, "bf16 conversion"):
     sys.exit(1)
 try:
+    convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
     result = subprocess.run(
-        ["python", "/root/.unsloth/llama.cpp/convert_hf_to_gguf.py",
+        ["python", convert_script,
          f"{{WORK}}/gguf_model",
          "--outfile", f"{{WORK}}/model-bf16.gguf",
          "--outtype", "bf16"],
@@ -405,7 +406,7 @@ try:
     )
     if result.returncode != 0:
         print(f"[WARN] bf16 stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
-        os.system(f"python /root/.unsloth/llama.cpp/convert_hf_to_gguf.py {{WORK}}/gguf_model --outfile {{WORK}}/model-bf16.gguf --outtype bf16")
+        os.system(f"python {{convert_script}} {{WORK}}/gguf_model --outfile {{WORK}}/model-bf16.gguf --outtype bf16")
     if not os.path.exists(f"{{WORK}}/model-bf16.gguf"):
         print("[ERROR] bf16 GGUF file not created!")
         sys.exit(1)
@@ -427,8 +428,9 @@ print("[STEP] Quantizing to q5_k_m...")
 if not check_disk(15, "q5_k_m quantization"):
     sys.exit(1)
 try:
+    quantize_bin = f"{{WORK}}/llama.cpp/build/bin/llama-quantize"
     result = subprocess.run(
-        ["/root/.unsloth/llama.cpp/llama-quantize",
+        [quantize_bin,
          f"{{WORK}}/model-bf16.gguf",
          f"{{WORK}}/model-q5_k_m.gguf",
          "q5_k_m"],
@@ -774,7 +776,16 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         run_ssh_command(ssh, 'pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" --force-reinstall --no-deps 2>&1 | tail -5')
         run_ssh_command(ssh, "pip install --upgrade unsloth_zoo --no-deps 2>&1 | tail -3")
         run_ssh_command(ssh, "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub 2>&1 | tail -5")
+        run_ssh_command(ssh, "pip install --upgrade transformers 2>&1 | tail -3")
         print("    ✅ All packages installed!")
+        
+        # [v1.2] Install llama.cpp to /workspace/ for GGUF conversion
+        print("    Installing llama.cpp for GGUF conversion...")
+        run_ssh_command(ssh, f"cd {WORK_DIR} && git clone https://github.com/ggml-org/llama.cpp 2>&1 | tail -3")
+        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && pip install -r requirements/requirements-convert_hf_to_gguf.txt 2>&1 | tail -5")
+        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -5")
+        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -5")
+        print("    ✅ llama.cpp installed!")
 
         hf_token = config.get("hf_token", "")
         if hf_token:
