@@ -29,7 +29,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║         🔥 ReSpark v1.2 🔥          ║
+    ║         🔥 ReSpark v1.3 🔥          ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -396,6 +396,10 @@ print("[STEP] Converting to bf16 GGUF...")
 if not check_disk(30, "bf16 conversion"):
     sys.exit(1)
 try:
+    # [v1.3] Remove torchvision to prevent circular import error
+    subprocess.run(["pip", "uninstall", "torchvision", "-y"], capture_output=True)
+    # [v1.3] Ensure transformers is up to date for Gemma 4 support
+    subprocess.run(["pip", "install", "--upgrade", "transformers"], capture_output=True)
     convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
     result = subprocess.run(
         ["python", convert_script,
@@ -848,7 +852,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             hf_repo = input("    Enter HuggingFace repo name (e.g. YourName/model-name): ").strip()
             if hf_repo:
                 print(f"    Uploading to {hf_repo}...")
-                run_ssh_command(ssh, f"huggingface-cli upload {hf_repo} {WORK_DIR}/model-q5_k_m.gguf --token {hf_token} 2>&1")
+                run_ssh_command(ssh, f"hf upload {hf_repo} {WORK_DIR}/model-q5_k_m.gguf --token {hf_token} 2>&1")
 
                 print("    🔍 Verifying upload...")
                 verify_output = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\', token=\'{hf_token}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
@@ -866,7 +870,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
                     else:
                         print(f"    ❌ Upload still failed.")
                         print(f"    Pod ID: {pod_id}")
-                        print(f"    Manual: huggingface-cli upload {hf_repo} {WORK_DIR}/model-q5_k_m.gguf")
+                        print(f"    Manual: hf upload {hf_repo} {WORK_DIR}/model-q5_k_m.gguf")
             else:
                 print("    ⚠️ No repo name given.")
                 print(f"    Pod ID: {pod_id}")
