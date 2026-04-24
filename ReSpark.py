@@ -24,7 +24,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║         🔥 ReSpark v1.4 🔥          ║
+    ║        🔥 ReSpark v1.4.1 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -275,6 +275,7 @@ import shutil
 import os
 import subprocess
 import sys
+import glob
 
 WORK = "/workspace"
 
@@ -287,7 +288,7 @@ def check_disk(min_gb, step_name):
         return False
     return True
 
-# [v1.4] Install torchvision inside train.py to guarantee it exists
+# [v1.4.1] Install torchvision inside train.py
 print("[STEP] Installing torchvision...")
 subprocess.run(["pip", "install", "torchvision"], capture_output=True)
 print("[STEP] torchvision installed!")
@@ -354,10 +355,18 @@ except Exception as e:
     print(f"[ERROR] Training failed: {{e}}")
     sys.exit(1)
 
+# ─── [v1.4.1] GGUF Export with vision projector fallback ───
+# Gemma 4 is multimodal, so save_pretrained_gguf tries to convert
+# the vision projector too. If that fails, we fall back to
+# merged model + manual text-only conversion using unsloth's llama.cpp.
+
 print("[STEP] Exporting to Ollama-compatible GGUF (q5_k_m)...")
-print("[STEP] This uses unsloth built-in converter for maximum compatibility.")
 if not check_disk(30, "GGUF export"):
     sys.exit(1)
+
+gguf_success = False
+
+# Method 1: Try save_pretrained_gguf (works for non-multimodal models)
 try:
     model.save_pretrained_gguf(
         f"{{WORK}}/gguf_export",
@@ -365,44 +374,216 @@ try:
         quantization_method="q5_k_m",
     )
     print("[STEP] GGUF export complete!")
+    gguf_success = True
 except Exception as e:
-    print(f"[ERROR] GGUF export failed: {{e}}")
-    print("[STEP] Trying q8_0 as fallback...")
+    error_msg = str(e)
+    print(f"[WARN] save_pretrained_gguf failed: {{error_msg[:200]}}")
+
+    # Check if text GGUF was partially created before vision projector failed
+    partial_files = glob.glob(f"{{WORK}}/gguf_export/*.gguf") + glob.glob(f"{{WORK}}/*.gguf") + glob.glob("/root/*.gguf")
+    # Also check for files created by unsloth's converter
+    for root, dirs, files in os.walk(WORK):
+        for f in files:
+            if f.endswith(".gguf") and "mmproj" not in f:
+                fpath = os.path.join(root, f)
+                if fpath not in partial_files:
+                    partial_files.append(fpath)
+    # Check home directory too
+    for root, dirs, files in os.walk("/root"):
+        for f in files:
+            if f.endswith(".gguf") and "mmproj" not in f:
+                fpath = os.path.join(root, f)
+                if fpath not in partial_files:
+                    partial_files.append(fpath)
+
+    # Filter out mmproj files (vision projector) - we only want text model
+    text_gguf_files = [f for f in partial_files if "mmproj" not in f and os.path.getsize(f) > 1_000_000_000]
+
+    if text_gguf_files:
+        print(f"[STEP] Found partial text GGUF: {{text_gguf_files[0]}}")
+        src = text_gguf_files[0]
+        fsize = os.path.getsize(src) / (1024**3)
+        print(f"[STEP] Size: {{fsize:.1f}}GB")
+
+        if "q5_k_m" in src or "Q5_K_M" in src:
+            # Already quantized!
+            shutil.copy2(src, f"{{WORK}}/model-q5_k_m.gguf")
+            gguf_success = True
+            print("[STEP] Text GGUF already quantized!")
+        else:
+            # It's bf16, need to quantize
+            print("[STEP] Text GGUF is bf16, quantizing to q5_k_m...")
+            # Find unsloth's llama-quantize
+            quantize_paths = glob.glob("/root/.unsloth/llama.cpp/build/bin/llama-quantize") + \
+                             glob.glob("/root/.unsloth/llama.cpp/llama-quantize") + \
+                             glob.glob("/root/.unsloth/**/llama-quantize", recursive=True)
+            if quantize_paths:
+                quantize_bin = quantize_paths[0]
+                print(f"[STEP] Using quantizer: {{quantize_bin}}")
+                result = subprocess.run(
+                    [quantize_bin, src, f"{{WORK}}/model-q5_k_m.gguf", "q5_k_m"],
+                    capture_output=True, text=True, timeout=3600
+                )
+                if os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
+                    gguf_success = True
+                    print("[STEP] Quantization complete!")
+                else:
+                    print(f"[WARN] Quantization failed: {{result.stderr[-300:] if result.stderr else 'unknown'}}")
+
+# Method 2: If Method 1 completely failed, do merged model + manual conversion
+if not gguf_success:
+    print("[STEP] Falling back to merged model + manual conversion...")
+
+    # Save merged model
+    print("[STEP] Saving merged model...")
+    if not check_disk(40, "merge model"):
+        sys.exit(1)
     try:
-        model.save_pretrained_gguf(
-            f"{{WORK}}/gguf_export",
-            tokenizer,
-            quantization_method="q8_0",
-        )
-        print("[STEP] q8_0 GGUF export complete! (fallback)")
-    except Exception as e2:
-        print(f"[ERROR] Fallback also failed: {{e2}}")
+        model.save_pretrained_merged(f"{{WORK}}/merged_model", tokenizer)
+        print("[STEP] Merged model saved!")
+    except Exception as e:
+        print(f"[ERROR] Failed to save merged model: {{e}}")
         sys.exit(1)
 
-import glob
-gguf_files = glob.glob(f"{{WORK}}/gguf_export/*.gguf")
-if not gguf_files:
-    gguf_files = glob.glob(f"{{WORK}}/gguf_export*q5*") + glob.glob(f"{{WORK}}/gguf_export*q8*") + glob.glob(f"{{WORK}}/gguf_export*.gguf")
+    # Free disk space
+    try:
+        if os.path.exists("/root/.cache/huggingface"):
+            shutil.rmtree("/root/.cache/huggingface")
+        if os.path.exists(f"{{WORK}}/output"):
+            shutil.rmtree(f"{{WORK}}/output")
+    except:
+        pass
 
-if gguf_files:
-    src = gguf_files[0]
-    dst = f"{{WORK}}/model-q5_k_m.gguf"
-    if src != dst:
-        shutil.copy2(src, dst)
-    file_size = os.path.getsize(dst) / (1024**3)
-    print(f"[STEP] Final GGUF: {{file_size:.1f}}GB")
+    # Find unsloth's convert script (installed by save_pretrained_gguf attempt)
+    convert_paths = glob.glob("/root/.unsloth/llama.cpp/unsloth_convert_hf_to_gguf.py") + \
+                    glob.glob("/root/.unsloth/llama.cpp/convert_hf_to_gguf.py") + \
+                    glob.glob("/root/.unsloth/**/convert_hf_to_gguf.py", recursive=True)
+
+    if not convert_paths:
+        # Install llama.cpp manually
+        print("[STEP] Installing llama.cpp for conversion...")
+        subprocess.run(["pip", "install", "llama-cpp-python"], capture_output=True)
+        # Try unsloth's internal installer
+        try:
+            import unsloth.save
+            # This might trigger llama.cpp installation
+        except:
+            pass
+        convert_paths = glob.glob("/root/.unsloth/**/convert_hf_to_gguf.py", recursive=True)
+
+    if convert_paths:
+        convert_script = convert_paths[0]
+        print(f"[STEP] Using converter: {{convert_script}}")
+
+        # Convert to bf16 GGUF (TEXT ONLY - no --mmproj flag!)
+        print("[STEP] Converting to bf16 GGUF (text only)...")
+        result = subprocess.run(
+            ["python", convert_script,
+             f"{{WORK}}/merged_model",
+             "--outfile", f"{{WORK}}/model-bf16.gguf",
+             "--outtype", "bf16"],
+            capture_output=True, text=True, timeout=3600
+        )
+        if result.returncode != 0:
+            print(f"[WARN] Convert stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
+            # Try without capture
+            os.system(f"python {{convert_script}} {{WORK}}/merged_model --outfile {{WORK}}/model-bf16.gguf --outtype bf16")
+
+        if os.path.exists(f"{{WORK}}/model-bf16.gguf"):
+            bf16_size = os.path.getsize(f"{{WORK}}/model-bf16.gguf") / (1024**3)
+            print(f"[STEP] bf16 GGUF created! ({{bf16_size:.1f}}GB)")
+
+            # Clean merged model to free space
+            try:
+                shutil.rmtree(f"{{WORK}}/merged_model")
+            except:
+                pass
+
+            # Quantize to q5_k_m
+            print("[STEP] Quantizing to q5_k_m...")
+            quantize_paths = glob.glob("/root/.unsloth/**/llama-quantize", recursive=True)
+            if not quantize_paths:
+                # Build llama-quantize
+                print("[STEP] Building llama-quantize...")
+                os.system(f"cd /root/.unsloth/llama.cpp && cmake -B build 2>&1 | tail -3")
+                os.system(f"cd /root/.unsloth/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -5")
+                quantize_paths = glob.glob("/root/.unsloth/**/llama-quantize", recursive=True)
+
+            if quantize_paths:
+                quantize_bin = quantize_paths[0]
+                result = subprocess.run(
+                    [quantize_bin, f"{{WORK}}/model-bf16.gguf", f"{{WORK}}/model-q5_k_m.gguf", "q5_k_m"],
+                    capture_output=True, text=True, timeout=3600
+                )
+                if os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
+                    gguf_success = True
+                    print("[STEP] Quantization complete!")
+                    # Clean bf16
+                    try:
+                        os.remove(f"{{WORK}}/model-bf16.gguf")
+                    except:
+                        pass
+                else:
+                    print(f"[ERROR] Quantization failed")
+            else:
+                print("[ERROR] Could not find or build llama-quantize")
+        else:
+            print("[ERROR] bf16 conversion failed")
+    else:
+        print("[ERROR] Could not find convert script")
+
+# Final check: find the GGUF file
+if not gguf_success:
+    # Last resort: search everywhere
+    all_gguf = []
+    for root, dirs, files in os.walk(WORK):
+        for f in files:
+            if f.endswith(".gguf") and "mmproj" not in f:
+                fpath = os.path.join(root, f)
+                fsize = os.path.getsize(fpath)
+                if fsize > 1_000_000_000:
+                    all_gguf.append((fpath, fsize))
+    for root, dirs, files in os.walk("/root"):
+        for f in files:
+            if f.endswith(".gguf") and "mmproj" not in f:
+                fpath = os.path.join(root, f)
+                fsize = os.path.getsize(fpath)
+                if fsize > 1_000_000_000:
+                    all_gguf.append((fpath, fsize))
+
+    if all_gguf:
+        # Pick the smallest one (likely quantized)
+        all_gguf.sort(key=lambda x: x[1])
+        src, fsize = all_gguf[0]
+        print(f"[STEP] Found GGUF file: {{src}} ({{fsize / (1024**3):.1f}}GB)")
+        if src != f"{{WORK}}/model-q5_k_m.gguf":
+            shutil.copy2(src, f"{{WORK}}/model-q5_k_m.gguf")
+        gguf_success = True
+    else:
+        print("[ERROR] No GGUF file found anywhere!")
+        print("[DEBUG] Listing /workspace/:")
+        os.system(f"find {{WORK}} -name '*.gguf' 2>/dev/null")
+        os.system("find /root -name '*.gguf' 2>/dev/null")
+        sys.exit(1)
+
+if gguf_success and os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
+    final_size = os.path.getsize(f"{{WORK}}/model-q5_k_m.gguf") / (1024**3)
+    print(f"[STEP] Final GGUF: {{final_size:.1f}}GB")
 else:
-    print("[ERROR] No GGUF file found after export!")
-    print("[DEBUG] Contents of /workspace/gguf_export/:")
-    for f in os.listdir(f"{{WORK}}/gguf_export"):
-        fpath = os.path.join(f"{{WORK}}/gguf_export", f)
-        fsize = os.path.getsize(fpath) / (1024**3)
-        print(f"  {{f}} ({{fsize:.1f}}GB)")
-    sys.exit(1)
+    # One more check with glob
+    found = glob.glob(f"{{WORK}}/model-q5_k_m.gguf")
+    if not found:
+        print("[ERROR] Final GGUF file missing!")
+        sys.exit(1)
 
+# Cleanup
 try:
     if os.path.exists(f"{{WORK}}/output"):
         shutil.rmtree(f"{{WORK}}/output")
+    if os.path.exists(f"{{WORK}}/gguf_export"):
+        shutil.rmtree(f"{{WORK}}/gguf_export")
+    if os.path.exists(f"{{WORK}}/merged_model"):
+        shutil.rmtree(f"{{WORK}}/merged_model")
     if os.path.exists("/root/.cache/huggingface"):
         shutil.rmtree("/root/.cache/huggingface")
 except:
@@ -625,7 +806,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             name="respark-finetune",
             image_name="runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04",
             gpu_type_id=model_info['gpu'],
-            cloud_type="SECURE",
+            cloud_type="ALL",
             volume_in_gb=200,
             container_disk_in_gb=200,
             ports="22/tcp",
