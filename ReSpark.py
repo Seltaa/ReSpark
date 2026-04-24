@@ -806,7 +806,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             name="respark-finetune",
             image_name="runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04",
             gpu_type_id=model_info['gpu'],
-            cloud_type="ALL",
+            cloud_type="SECURE",
             volume_in_gb=200,
             container_disk_in_gb=200,
             ports="22/tcp",
