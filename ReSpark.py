@@ -758,6 +758,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         run_ssh_command(ssh, "pip install --upgrade unsloth_zoo --no-deps 2>&1 | tail -3")
         run_ssh_command(ssh, "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub 2>&1 | tail -5")
         run_ssh_command(ssh, "pip install --upgrade transformers 2>&1 | tail -3")
+        run_ssh_command(ssh, "pip install torchvision 2>&1 | tail -3")
         print("    ✅ All packages installed!")
 
         hf_token = config.get("hf_token", "")
