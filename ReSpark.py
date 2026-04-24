@@ -24,7 +24,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.4.1 🔥         ║
+    ║        🔥 ReSpark v1.4.2 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -241,14 +241,14 @@ def clean_training_data(pairs):
     return cleaned, removed_count
 
 MODEL_INFO = {
-    "1": {"name": "gemma-4-31b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "google/gemma-4-31B-it", "vram": 80},
-    "2": {"name": "gemma-4-31b-crack", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "wangzhang/gemma-4-31B-it-abliterated", "vram": 80},
-    "3": {"name": "gemma-4-9b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "google/gemma-4-E4B-it", "vram": 24},
-    "4": {"name": "qwen-32b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "Qwen/Qwen2.5-32B-Instruct", "vram": 80},
-    "5": {"name": "qwen-14b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "Qwen/Qwen2.5-14B-Instruct", "vram": 24},
-    "6": {"name": "llama-70b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "meta-llama/Llama-3.1-70B-Instruct", "vram": 80},
-    "7": {"name": "llama-8b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "meta-llama/Llama-3.1-8B-Instruct", "vram": 24},
-    "8": {"name": "mistral-14b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "mistralai/Mistral-Small-24B-Instruct-2501", "vram": 24},
+    "1": {"name": "gemma-4-31b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "google/gemma-4-31B-it", "vram": 80, "min_gguf_gb": 15},
+    "2": {"name": "gemma-4-31b-crack", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "wangzhang/gemma-4-31B-it-abliterated", "vram": 80, "min_gguf_gb": 15},
+    "3": {"name": "gemma-4-9b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "google/gemma-4-E4B-it", "vram": 24, "min_gguf_gb": 3},
+    "4": {"name": "qwen-32b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "Qwen/Qwen2.5-32B-Instruct", "vram": 80, "min_gguf_gb": 15},
+    "5": {"name": "qwen-14b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "Qwen/Qwen2.5-14B-Instruct", "vram": 24, "min_gguf_gb": 7},
+    "6": {"name": "llama-70b", "gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "hf_id": "meta-llama/Llama-3.1-70B-Instruct", "vram": 80, "min_gguf_gb": 35},
+    "7": {"name": "llama-8b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "meta-llama/Llama-3.1-8B-Instruct", "vram": 24, "min_gguf_gb": 4},
+    "8": {"name": "mistral-14b", "gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "hf_id": "mistralai/Mistral-Small-24B-Instruct-2501", "vram": 24, "min_gguf_gb": 7},
 }
 
 def select_model():
@@ -267,7 +267,13 @@ def select_model():
     choice = input("    Select: ")
     return MODEL_INFO.get(choice, None)
 
+# ─────────────────────
+# [v1.4.2] Training Script Generator
+# Back to v1.0 method: save_pretrained_merged + llama.cpp
+# With file size validation and bug fixes
+# ─────────────────────
 def generate_training_script(model_info, data_path):
+    min_gguf_gb = model_info.get("min_gguf_gb", 10)
     script = f'''
 import json
 import torch
@@ -275,9 +281,9 @@ import shutil
 import os
 import subprocess
 import sys
-import glob
 
 WORK = "/workspace"
+MIN_GGUF_GB = {min_gguf_gb}
 
 def check_disk(min_gb, step_name):
     stat = os.statvfs(WORK)
@@ -288,7 +294,7 @@ def check_disk(min_gb, step_name):
         return False
     return True
 
-# [v1.4.1] Install torchvision inside train.py
+# [v1.4.2] Install torchvision inside train.py
 print("[STEP] Installing torchvision...")
 subprocess.run(["pip", "install", "torchvision"], capture_output=True)
 print("[STEP] torchvision installed!")
@@ -355,237 +361,130 @@ except Exception as e:
     print(f"[ERROR] Training failed: {{e}}")
     sys.exit(1)
 
-# ─── [v1.4.1] GGUF Export with vision projector fallback ───
-# Gemma 4 is multimodal, so save_pretrained_gguf tries to convert
-# the vision projector too. If that fails, we fall back to
-# merged model + manual text-only conversion using unsloth's llama.cpp.
+# ─── [v1.4.2] Post-training: v1.0 method ───
+# save_pretrained_merged → llama.cpp convert → llama-quantize
+# This is the proven method that worked in v1.0
 
-print("[STEP] Exporting to Ollama-compatible GGUF (q5_k_m)...")
-if not check_disk(30, "GGUF export"):
+print("[STEP] Saving merged model...")
+if not check_disk(40, "merge model"):
+    sys.exit(1)
+try:
+    model.save_pretrained_merged(f"{{WORK}}/gguf_model", tokenizer)
+    print("[STEP] Merged model saved!")
+except Exception as e:
+    print(f"[ERROR] Failed to save merged model: {{e}}")
     sys.exit(1)
 
-gguf_success = False
-
-# Method 1: Try save_pretrained_gguf (works for non-multimodal models)
+print("[STEP] Freeing disk space...")
 try:
-    model.save_pretrained_gguf(
-        f"{{WORK}}/gguf_export",
-        tokenizer,
-        quantization_method="q5_k_m",
-    )
-    print("[STEP] GGUF export complete!")
-    gguf_success = True
-except Exception as e:
-    error_msg = str(e)
-    print(f"[WARN] save_pretrained_gguf failed: {{error_msg[:200]}}")
-
-    # Check if text GGUF was partially created before vision projector failed
-    partial_files = glob.glob(f"{{WORK}}/gguf_export/*.gguf") + glob.glob(f"{{WORK}}/*.gguf") + glob.glob("/root/*.gguf")
-    # Also check for files created by unsloth's converter
-    for root, dirs, files in os.walk(WORK):
-        for f in files:
-            if f.endswith(".gguf") and "mmproj" not in f:
-                fpath = os.path.join(root, f)
-                if fpath not in partial_files:
-                    partial_files.append(fpath)
-    # Check home directory too
-    for root, dirs, files in os.walk("/root"):
-        for f in files:
-            if f.endswith(".gguf") and "mmproj" not in f:
-                fpath = os.path.join(root, f)
-                if fpath not in partial_files:
-                    partial_files.append(fpath)
-
-    # Filter out mmproj files (vision projector) - we only want text model
-    text_gguf_files = [f for f in partial_files if "mmproj" not in f and os.path.getsize(f) > 1_000_000_000]
-
-    if text_gguf_files:
-        print(f"[STEP] Found partial text GGUF: {{text_gguf_files[0]}}")
-        src = text_gguf_files[0]
-        fsize = os.path.getsize(src) / (1024**3)
-        print(f"[STEP] Size: {{fsize:.1f}}GB")
-
-        if "q5_k_m" in src or "Q5_K_M" in src:
-            # Already quantized!
-            shutil.copy2(src, f"{{WORK}}/model-q5_k_m.gguf")
-            gguf_success = True
-            print("[STEP] Text GGUF already quantized!")
-        else:
-            # It's bf16, need to quantize
-            print("[STEP] Text GGUF is bf16, quantizing to q5_k_m...")
-            # Find unsloth's llama-quantize
-            quantize_paths = glob.glob("/root/.unsloth/llama.cpp/build/bin/llama-quantize") + \
-                             glob.glob("/root/.unsloth/llama.cpp/llama-quantize") + \
-                             glob.glob("/root/.unsloth/**/llama-quantize", recursive=True)
-            if quantize_paths:
-                quantize_bin = quantize_paths[0]
-                print(f"[STEP] Using quantizer: {{quantize_bin}}")
-                result = subprocess.run(
-                    [quantize_bin, src, f"{{WORK}}/model-q5_k_m.gguf", "q5_k_m"],
-                    capture_output=True, text=True, timeout=3600
-                )
-                if os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
-                    gguf_success = True
-                    print("[STEP] Quantization complete!")
-                else:
-                    print(f"[WARN] Quantization failed: {{result.stderr[-300:] if result.stderr else 'unknown'}}")
-
-# Method 2: If Method 1 completely failed, do merged model + manual conversion
-if not gguf_success:
-    print("[STEP] Falling back to merged model + manual conversion...")
-
-    # Save merged model
-    print("[STEP] Saving merged model...")
-    if not check_disk(40, "merge model"):
-        sys.exit(1)
-    try:
-        model.save_pretrained_merged(f"{{WORK}}/merged_model", tokenizer)
-        print("[STEP] Merged model saved!")
-    except Exception as e:
-        print(f"[ERROR] Failed to save merged model: {{e}}")
-        sys.exit(1)
-
-    # Free disk space
-    try:
-        if os.path.exists("/root/.cache/huggingface"):
-            shutil.rmtree("/root/.cache/huggingface")
-        if os.path.exists(f"{{WORK}}/output"):
-            shutil.rmtree(f"{{WORK}}/output")
-    except:
-        pass
-
-    # Find unsloth's convert script (installed by save_pretrained_gguf attempt)
-    convert_paths = glob.glob("/root/.unsloth/llama.cpp/unsloth_convert_hf_to_gguf.py") + \
-                    glob.glob("/root/.unsloth/llama.cpp/convert_hf_to_gguf.py") + \
-                    glob.glob("/root/.unsloth/**/convert_hf_to_gguf.py", recursive=True)
-
-    if not convert_paths:
-        # Install llama.cpp manually
-        print("[STEP] Installing llama.cpp for conversion...")
-        subprocess.run(["pip", "install", "llama-cpp-python"], capture_output=True)
-        # Try unsloth's internal installer
-        try:
-            import unsloth.save
-            # This might trigger llama.cpp installation
-        except:
-            pass
-        convert_paths = glob.glob("/root/.unsloth/**/convert_hf_to_gguf.py", recursive=True)
-
-    if convert_paths:
-        convert_script = convert_paths[0]
-        print(f"[STEP] Using converter: {{convert_script}}")
-
-        # Convert to bf16 GGUF (TEXT ONLY - no --mmproj flag!)
-        print("[STEP] Converting to bf16 GGUF (text only)...")
-        result = subprocess.run(
-            ["python", convert_script,
-             f"{{WORK}}/merged_model",
-             "--outfile", f"{{WORK}}/model-bf16.gguf",
-             "--outtype", "bf16"],
-            capture_output=True, text=True, timeout=3600
-        )
-        if result.returncode != 0:
-            print(f"[WARN] Convert stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
-            # Try without capture
-            os.system(f"python {{convert_script}} {{WORK}}/merged_model --outfile {{WORK}}/model-bf16.gguf --outtype bf16")
-
-        if os.path.exists(f"{{WORK}}/model-bf16.gguf"):
-            bf16_size = os.path.getsize(f"{{WORK}}/model-bf16.gguf") / (1024**3)
-            print(f"[STEP] bf16 GGUF created! ({{bf16_size:.1f}}GB)")
-
-            # Clean merged model to free space
-            try:
-                shutil.rmtree(f"{{WORK}}/merged_model")
-            except:
-                pass
-
-            # Quantize to q5_k_m
-            print("[STEP] Quantizing to q5_k_m...")
-            quantize_paths = glob.glob("/root/.unsloth/**/llama-quantize", recursive=True)
-            if not quantize_paths:
-                # Build llama-quantize
-                print("[STEP] Building llama-quantize...")
-                os.system(f"cd /root/.unsloth/llama.cpp && cmake -B build 2>&1 | tail -3")
-                os.system(f"cd /root/.unsloth/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -5")
-                quantize_paths = glob.glob("/root/.unsloth/**/llama-quantize", recursive=True)
-
-            if quantize_paths:
-                quantize_bin = quantize_paths[0]
-                result = subprocess.run(
-                    [quantize_bin, f"{{WORK}}/model-bf16.gguf", f"{{WORK}}/model-q5_k_m.gguf", "q5_k_m"],
-                    capture_output=True, text=True, timeout=3600
-                )
-                if os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
-                    gguf_success = True
-                    print("[STEP] Quantization complete!")
-                    # Clean bf16
-                    try:
-                        os.remove(f"{{WORK}}/model-bf16.gguf")
-                    except:
-                        pass
-                else:
-                    print(f"[ERROR] Quantization failed")
-            else:
-                print("[ERROR] Could not find or build llama-quantize")
-        else:
-            print("[ERROR] bf16 conversion failed")
-    else:
-        print("[ERROR] Could not find convert script")
-
-# Final check: find the GGUF file
-if not gguf_success:
-    # Last resort: search everywhere
-    all_gguf = []
-    for root, dirs, files in os.walk(WORK):
-        for f in files:
-            if f.endswith(".gguf") and "mmproj" not in f:
-                fpath = os.path.join(root, f)
-                fsize = os.path.getsize(fpath)
-                if fsize > 1_000_000_000:
-                    all_gguf.append((fpath, fsize))
-    for root, dirs, files in os.walk("/root"):
-        for f in files:
-            if f.endswith(".gguf") and "mmproj" not in f:
-                fpath = os.path.join(root, f)
-                fsize = os.path.getsize(fpath)
-                if fsize > 1_000_000_000:
-                    all_gguf.append((fpath, fsize))
-
-    if all_gguf:
-        # Pick the smallest one (likely quantized)
-        all_gguf.sort(key=lambda x: x[1])
-        src, fsize = all_gguf[0]
-        print(f"[STEP] Found GGUF file: {{src}} ({{fsize / (1024**3):.1f}}GB)")
-        if src != f"{{WORK}}/model-q5_k_m.gguf":
-            shutil.copy2(src, f"{{WORK}}/model-q5_k_m.gguf")
-        gguf_success = True
-    else:
-        print("[ERROR] No GGUF file found anywhere!")
-        print("[DEBUG] Listing /workspace/:")
-        os.system(f"find {{WORK}} -name '*.gguf' 2>/dev/null")
-        os.system("find /root -name '*.gguf' 2>/dev/null")
-        sys.exit(1)
-
-if gguf_success and os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
-    final_size = os.path.getsize(f"{{WORK}}/model-q5_k_m.gguf") / (1024**3)
-    print(f"[STEP] Final GGUF: {{final_size:.1f}}GB")
-else:
-    # One more check with glob
-    found = glob.glob(f"{{WORK}}/model-q5_k_m.gguf")
-    if not found:
-        print("[ERROR] Final GGUF file missing!")
-        sys.exit(1)
-
-# Cleanup
-try:
-    if os.path.exists(f"{{WORK}}/output"):
-        shutil.rmtree(f"{{WORK}}/output")
-    if os.path.exists(f"{{WORK}}/gguf_export"):
-        shutil.rmtree(f"{{WORK}}/gguf_export")
-    if os.path.exists(f"{{WORK}}/merged_model"):
-        shutil.rmtree(f"{{WORK}}/merged_model")
     if os.path.exists("/root/.cache/huggingface"):
         shutil.rmtree("/root/.cache/huggingface")
+    if os.path.exists(f"{{WORK}}/output"):
+        shutil.rmtree(f"{{WORK}}/output")
+    print("[STEP] Disk space freed!")
+except Exception as e:
+    print(f"[WARN] Cleanup partial: {{e}}")
+
+print("[STEP] Converting to bf16 GGUF...")
+if not check_disk(30, "bf16 conversion"):
+    sys.exit(1)
+try:
+    # [v1.4.2] Remove torchvision to prevent circular import during conversion
+    subprocess.run(["pip", "uninstall", "torchvision", "-y"], capture_output=True)
+    # Ensure transformers is up to date
+    subprocess.run(["pip", "install", "--upgrade", "transformers"], capture_output=True)
+
+    # Install llama.cpp
+    print("[STEP] Installing llama.cpp...")
+    subprocess.run(["pip", "install", "-r", f"{{WORK}}/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"], capture_output=True)
+
+    convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
+
+    if not os.path.exists(convert_script):
+        print("[ERROR] llama.cpp convert script not found!")
+        print("[STEP] llama.cpp should have been installed during setup.")
+        sys.exit(1)
+
+    result = subprocess.run(
+        ["python", convert_script,
+         f"{{WORK}}/gguf_model",
+         "--outfile", f"{{WORK}}/model-bf16.gguf",
+         "--outtype", "bf16"],
+        capture_output=True, text=True, timeout=3600
+    )
+    if result.returncode != 0:
+        print(f"[WARN] bf16 stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
+        # Try without capture as fallback
+        os.system(f"python {{convert_script}} {{WORK}}/gguf_model --outfile {{WORK}}/model-bf16.gguf --outtype bf16")
+
+    if not os.path.exists(f"{{WORK}}/model-bf16.gguf"):
+        print("[ERROR] bf16 GGUF file not created!")
+        sys.exit(1)
+
+    bf16_size = os.path.getsize(f"{{WORK}}/model-bf16.gguf") / (1024**3)
+    print(f"[STEP] bf16 GGUF created! ({{bf16_size:.1f}}GB)")
+
+    # [v1.4.2] Size validation for bf16
+    if bf16_size < MIN_GGUF_GB:
+        print(f"[ERROR] bf16 GGUF too small! Expected at least {{MIN_GGUF_GB}}GB but got {{bf16_size:.1f}}GB")
+        print("[ERROR] This likely means the conversion was incomplete.")
+        sys.exit(1)
+
+except Exception as e:
+    print(f"[ERROR] bf16 conversion failed: {{e}}")
+    sys.exit(1)
+
+print("[STEP] Removing merged model to free space...")
+try:
+    if os.path.exists(f"{{WORK}}/gguf_model"):
+        shutil.rmtree(f"{{WORK}}/gguf_model")
+    print("[STEP] Merged model removed!")
+except Exception as e:
+    print(f"[WARN] Cleanup partial: {{e}}")
+
+print("[STEP] Quantizing to q5_k_m...")
+if not check_disk(15, "q5_k_m quantization"):
+    sys.exit(1)
+try:
+    quantize_bin = f"{{WORK}}/llama.cpp/build/bin/llama-quantize"
+
+    if not os.path.exists(quantize_bin):
+        print("[ERROR] llama-quantize not found!")
+        print("[STEP] llama.cpp should have been built during setup.")
+        sys.exit(1)
+
+    result = subprocess.run(
+        [quantize_bin,
+         f"{{WORK}}/model-bf16.gguf",
+         f"{{WORK}}/model-q5_k_m.gguf",
+         "q5_k_m"],
+        capture_output=True, text=True, timeout=3600
+    )
+    if result.returncode != 0:
+        print(f"[WARN] quantize stderr: {{result.stderr[-500:] if result.stderr else 'none'}}")
+
+    if not os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
+        print("[ERROR] q5_k_m GGUF file not created!")
+        sys.exit(1)
+
+    q5_size = os.path.getsize(f"{{WORK}}/model-q5_k_m.gguf") / (1024**3)
+    print(f"[STEP] q5_k_m GGUF created! ({{q5_size:.1f}}GB)")
+
+    # [v1.4.2] Size validation for q5_k_m
+    if q5_size < MIN_GGUF_GB:
+        print(f"[ERROR] q5_k_m GGUF too small! Expected at least {{MIN_GGUF_GB}}GB but got {{q5_size:.1f}}GB")
+        print("[ERROR] This likely means the quantization was incomplete.")
+        sys.exit(1)
+
+except Exception as e:
+    print(f"[ERROR] Quantization failed: {{e}}")
+    sys.exit(1)
+
+# Cleanup bf16
+try:
+    if os.path.exists(f"{{WORK}}/model-bf16.gguf"):
+        os.remove(f"{{WORK}}/model-bf16.gguf")
+        print("[STEP] bf16 file cleaned up!")
 except:
     pass
 
@@ -593,6 +492,9 @@ print("RESPARK_DONE")
 '''
     return script
 
+# ─────────────────────
+# SSH Helpers
+# ─────────────────────
 def wait_for_pod(pod_id):
     import runpod
     print("    Waiting for pod to start", end="", flush=True)
@@ -617,18 +519,19 @@ def wait_for_pod(pod_id):
     print(" ❌ Timeout!")
     return None, None
 
-def run_ssh_command(ssh, command):
-    stdin, stdout, stderr = ssh.exec_command(command, timeout=7200)
-    output = ""
-    for line in iter(stdout.readline, ""):
-        print(f"    {line.strip()}")
-        output += line
-    errors = stderr.read().decode()
-    if errors:
-        for line in errors.strip().split("\n"):
-            if line.strip():
-                print(f"    [stderr] {line.strip()}")
-    return output
+# [v1.4.2] Fixed: captures stderr in return value
+def run_ssh_command(ssh, command, timeout=7200):
+    stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
+    out = stdout.read().decode(errors="replace")
+    err = stderr.read().decode(errors="replace")
+    exit_code = stdout.channel.recv_exit_status()
+    combined = out + "\n" + err
+    for line in combined.strip().split("\n"):
+        if line.strip():
+            print(f"    {line.strip()}")
+    if exit_code != 0:
+        print(f"    ⚠️ Command exited with code {exit_code}")
+    return combined
 
 def ssh_connect(ssh_host, ssh_port, ssh_key_path, max_retries=5):
     import paramiko
@@ -716,6 +619,9 @@ def poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path):
                 print(f"    Check manually: tail -f {WORK_DIR}/train.log")
                 return "ERROR: SSH connection lost permanently"
 
+# ─────────────────────
+# Main Flow
+# ─────────────────────
 def start_finetuning():
     config = load_config()
     if not config.get("runpod_api_key"):
@@ -779,7 +685,7 @@ def start_finetuning():
     print(f"    Model:  {model_info['name']}")
     print(f"    GPU:    {model_info['gpu_label']}")
     print(f"    Cost:   {model_info['cost']}")
-    print(f"    GGUF:   Ollama-compatible (via unsloth)")
+    print(f"    GGUF:   via llama.cpp (proven method)")
     print(f"\n    ⚠️ WARNING: Pressing Start will create a RunPod instance.")
     print(f"    You will be charged {model_info['cost']} to your RunPod account.")
     print(f"\n    1. Start")
@@ -800,6 +706,8 @@ def run_finetuning(config, file_path, pairs, model_info, source):
     print(f"    GPU:   {model_info['gpu_label']}")
     print(f"    Cost:  {model_info['cost']}")
     print()
+
+    # [1/6] Create Pod
     print("    [1/6] Creating RunPod instance...")
     try:
         pod = runpod.create_pod(
@@ -817,6 +725,8 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         print(f"    ❌ Failed to create pod: {e}")
         input("\n    Press Enter to go back...")
         return
+
+    # [2/6] Wait for Pod
     print("\n    [2/6] Waiting for pod to start...")
     ssh_host, ssh_port = wait_for_pod(pod_id)
     if not ssh_host or not ssh_port:
@@ -839,6 +749,8 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         runpod.terminate_pod(pod_id)
         input("\n    Press Enter to go back...")
         return
+
+    # [3/6] Upload
     print("\n    [3/6] Uploading training data...")
     try:
         temp_data = os.path.join(os.path.expanduser("~"), "respark_temp_data.json")
@@ -859,12 +771,16 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         runpod.terminate_pod(pod_id)
         input("\n    Press Enter to go back...")
         return
+
+    # [4/6] Install & Train
+    # [v1.4.2] Back to installing llama.cpp (v1.0 method)
     print("\n    [4/6] Installing dependencies & training...")
     print("    (This will take 3-5 hours for 31B)\n")
     try:
         print("    Installing system packages...")
         run_ssh_command(ssh, "apt-get update && apt-get install -y cmake libcurl4-openssl-dev libssl-dev 2>&1 | tail -5")
         print("    ✅ System packages installed!")
+
         print("    Installing Python packages...")
         run_ssh_command(ssh, "pip install --upgrade pip 2>&1 | tail -3")
         run_ssh_command(ssh, "pip install unsloth 2>&1 | tail -5")
@@ -874,16 +790,29 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         run_ssh_command(ssh, "pip install --upgrade transformers 2>&1 | tail -3")
         run_ssh_command(ssh, "pip install torchvision 2>&1 | tail -3")
         print("    ✅ All packages installed!")
+
+        # [v1.4.2] Install llama.cpp (v1.0 method)
+        print("    Installing llama.cpp for GGUF conversion...")
+        run_ssh_command(ssh, f"cd {WORK_DIR} && git clone https://github.com/ggml-org/llama.cpp 2>&1 | tail -3")
+        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && pip install -r requirements/requirements-convert_hf_to_gguf.txt 2>&1 | tail -5")
+        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -5")
+        run_ssh_command(ssh, f"cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -5")
+        print("    ✅ llama.cpp installed!")
+
         hf_token = config.get("hf_token", "")
         if hf_token:
             run_ssh_command(ssh, f'python -c "from huggingface_hub import login; login(token=\'{hf_token}\')" 2>&1')
             print("    ✅ HuggingFace logged in!")
+
         print("\n    📊 Checking disk space...")
         run_ssh_command(ssh, f"df -h / {WORK_DIR} 2>/dev/null | head -5")
+
         print("\n    🔥 Training started (nohup mode)! Monitoring log...\n")
         run_ssh_command(ssh, f"nohup python -u {WORK_DIR}/train.py > {WORK_DIR}/train.log 2>&1 &")
         time.sleep(5)
+
         result = poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path)
+
         if result == "RESPARK_DONE":
             print("\n    ✅ Training & GGUF export complete!")
         else:
@@ -891,13 +820,19 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             print(f"    Pod ID: {pod_id}")
             print(f"    Check logs: cat {WORK_DIR}/train.log")
             input("\n    Press Enter to continue...")
+            return  # [v1.4.2] Fixed: return on failure
+
     except Exception as e:
         print(f"    ❌ Training failed: {e}")
         print(f"    Pod ID: {pod_id}")
         input("\n    Press Enter to go back...")
         return
+
+    # [5/6] Upload to HuggingFace
+    # [v1.4.2] Fixed: uses create_repo + Python API
     print("\n    [5/6] Uploading GGUF model to HuggingFace...")
     upload_success = False
+
     try:
         ssh.exec_command("echo test", timeout=10)
     except:
@@ -907,38 +842,64 @@ def run_finetuning(config, file_path, pairs, model_info, source):
             print(f"    ❌ Cannot reconnect. Pod ID: {pod_id}")
             input("\n    Press Enter to go back...")
             return
+
     try:
         stdin, stdout, stderr = ssh.exec_command(f"ls -lh {WORK_DIR}/model-q5_k_m.gguf 2>&1", timeout=30)
         file_check = stdout.read().decode().strip()
         print(f"    {file_check}")
+
         if "No such file" in file_check:
             print("    ❌ Model file not found!")
             print(f"    Pod ID: {pod_id}")
             print(f"    Check: cat {WORK_DIR}/train.log")
             input("\n    Press Enter to go back...")
             return
+
         hf_token = config.get("hf_token", "")
         if hf_token:
             hf_repo = input("    Enter HuggingFace repo name (e.g. YourName/model-name): ").strip()
             if hf_repo:
-                print(f"    Uploading to {hf_repo}...")
-                run_ssh_command(ssh, f"hf upload {hf_repo} {WORK_DIR}/model-q5_k_m.gguf --token {hf_token} 2>&1")
-                print("    🔍 Verifying upload...")
-                verify_output = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\', token=\'{hf_token}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
+                print(f"    Creating/verifying repo and uploading to {hf_repo}...")
+
+                upload_cmd = f'''python -c "
+from huggingface_hub import HfApi
+import sys
+
+token = '{hf_token}'
+repo_id = '{hf_repo}'
+file_path = '{WORK_DIR}/model-q5_k_m.gguf'
+
+api = HfApi(token=token)
+
+print('[HF] Creating repo if needed...')
+api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True)
+
+print('[HF] Uploading file...')
+api.upload_file(
+    path_or_fileobj=file_path,
+    path_in_repo='model-q5_k_m.gguf',
+    repo_id=repo_id,
+    repo_type='model',
+)
+
+print('[HF] Verifying...')
+files = api.list_repo_files(repo_id=repo_id, repo_type='model')
+if 'model-q5_k_m.gguf' in files:
+    print('VERIFIED')
+else:
+    print('NOT_FOUND')
+    sys.exit(1)
+" 2>&1'''
+
+                verify_output = run_ssh_command(ssh, upload_cmd)
+
                 if "VERIFIED" in verify_output:
                     print(f"    ✅ Upload verified!")
                     upload_success = True
                 else:
-                    print(f"    ❌ Upload failed! Trying fallback...")
-                    run_ssh_command(ssh, f'python -c "from huggingface_hub import HfApi; api = HfApi(token=\'{hf_token}\'); api.upload_file(path_or_fileobj=\'{WORK_DIR}/model-q5_k_m.gguf\', path_in_repo=\'model-q5_k_m.gguf\', repo_id=\'{hf_repo}\', repo_type=\'model\')" 2>&1')
-                    verify2 = run_ssh_command(ssh, f'python -c "from huggingface_hub import list_repo_files; files = list_repo_files(\'{hf_repo}\', token=\'{hf_token}\'); print(\'VERIFIED\' if any(\'q5_k_m\' in f for f in files) else \'NOT_FOUND\')" 2>&1')
-                    if "VERIFIED" in verify2:
-                        print(f"    ✅ Upload verified with fallback!")
-                        upload_success = True
-                    else:
-                        print(f"    ❌ Upload still failed.")
-                        print(f"    Pod ID: {pod_id}")
-                        print(f"    Manual: hf upload {hf_repo} {WORK_DIR}/model-q5_k_m.gguf")
+                    print(f"    ❌ Upload failed.")
+                    print(f"    Pod ID: {pod_id}")
+                    print(f"    Manual: upload {WORK_DIR}/model-q5_k_m.gguf to {hf_repo}")
             else:
                 print("    ⚠️ No repo name given.")
                 print(f"    Pod ID: {pod_id}")
@@ -948,11 +909,14 @@ def run_finetuning(config, file_path, pairs, model_info, source):
     except Exception as e:
         print(f"    ❌ Upload failed: {e}")
         print(f"    Pod ID: {pod_id}")
+
+    # [6/6] Cleanup
     print("\n    [6/6] Cleanup...")
     try:
         ssh.close()
     except:
         pass
+
     if upload_success:
         try:
             runpod.terminate_pod(pod_id)
@@ -963,6 +927,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
         print(f"    ⚠️ Pod NOT terminated. Model file is at {WORK_DIR}/model-q5_k_m.gguf")
         print(f"    ⚠️ Pod ID: {pod_id}")
         print(f"    ⚠️ You are still being charged!")
+
     try:
         for f in ["respark_temp_data.json", "respark_temp_train.py"]:
             p = os.path.join(os.path.expanduser("~"), f)
@@ -970,6 +935,7 @@ def run_finetuning(config, file_path, pairs, model_info, source):
                 os.remove(p)
     except:
         pass
+
     clear()
     banner()
     if upload_success:
