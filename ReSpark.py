@@ -874,6 +874,20 @@ api = HfApi(token=token)
 print('[HF] Creating repo if needed...')
 api.create_repo(repo_id=repo_id, repo_type='model', exist_ok=True)
 
+print('[HF] Cleaning old files and setting public...')
+try:
+    files = api.list_repo_files(repo_id=repo_id, repo_type='model')
+    for f in files:
+        if f.endswith('.gguf'):
+            api.delete_file(path_in_repo=f, repo_id=repo_id, repo_type='model')
+            print(f'[HF] Deleted old file: {f}')
+except:
+    pass
+try:
+    api.update_repo_settings(repo_id=repo_id, private=False, repo_type='model')
+except:
+    pass
+    
 print('[HF] Uploading file...')
 api.upload_file(
     path_or_fileobj=file_path,
