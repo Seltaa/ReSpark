@@ -313,6 +313,16 @@ MODEL_INFO = {
         "min_q5_gb": 18,
     },
     "3": {
+        "name": "gemma-4-26b-a4b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "A100 80GB",
+        "cost": "~$1.60/hr",
+        "hf_id": "google/gemma-4-26B-A4B-it",
+        "vram": 80,
+        "min_bf16_gb": 40,
+        "min_q5_gb": 15,
+    },
+    "4": {
         "name": "gemma-4-e4b",
         "gpu": "NVIDIA RTX A5000",
         "gpu_label": "A5000 24GB",
@@ -322,7 +332,7 @@ MODEL_INFO = {
         "min_bf16_gb": 6,
         "min_q5_gb": 2,
     },
-    "4": {
+    "5": {
         "name": "qwen-32b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -332,7 +342,7 @@ MODEL_INFO = {
         "min_bf16_gb": 45,
         "min_q5_gb": 18,
     },
-    "5": {
+    "6": {
         "name": "qwen-14b",
         "gpu": "NVIDIA RTX A5000",
         "gpu_label": "A5000 24GB",
@@ -342,7 +352,7 @@ MODEL_INFO = {
         "min_bf16_gb": 20,
         "min_q5_gb": 7,
     },
-    "6": {
+    "7": {
         "name": "llama-70b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -352,7 +362,7 @@ MODEL_INFO = {
         "min_bf16_gb": 95,
         "min_q5_gb": 35,
     },
-    "7": {
+    "8": {
         "name": "llama-8b",
         "gpu": "NVIDIA RTX A5000",
         "gpu_label": "A5000 24GB",
@@ -362,7 +372,7 @@ MODEL_INFO = {
         "min_bf16_gb": 10,
         "min_q5_gb": 3,
     },
-    "8": {
+    "9": {
         "name": "mistral-24b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -380,13 +390,14 @@ def select_model():
     banner()
     print("    🤖 Select base model:\n")
     print("    1. Gemma 4 31B          [A100 80GB ~$1.60/hr] (official)")
-    print("    2. Gemma 4 31B crack    [A100 80GB ~$1.60/hr] (abliterated, recommended)")
-    print("    3. Gemma 4 E4B          [A5000 24GB ~$0.50/hr]")
-    print("    4. Qwen 32B             [A100 80GB ~$1.60/hr]")
-    print("    5. Qwen 14B             [A5000 24GB ~$0.50/hr]")
-    print("    6. Llama 70B            [A100 80GB ~$1.60/hr]")
-    print("    7. Llama 8B             [A5000 24GB ~$0.50/hr]")
-    print("    8. Mistral 24B          [A100 80GB ~$1.60/hr]")
+    print("    2. Gemma 4 31B crack    [A100 80GB ~$1.60/hr] (abliterated)")
+    print("    3. Gemma 4 26B A4B      [A100 80GB ~$1.60/hr] (MoE, recommended)")
+    print("    4. Gemma 4 E4B          [A5000 24GB ~$0.50/hr]")
+    print("    5. Qwen 32B             [A100 80GB ~$1.60/hr]")
+    print("    6. Qwen 14B             [A5000 24GB ~$0.50/hr]")
+    print("    7. Llama 70B            [A100 80GB ~$1.60/hr]")
+    print("    8. Llama 8B             [A5000 24GB ~$0.50/hr]")
+    print("    9. Mistral 24B          [A100 80GB ~$1.60/hr]")
     print()
     choice = input("    Select: ").strip()
     return MODEL_INFO.get(choice)
@@ -773,7 +784,6 @@ def poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path):
 
 # ─────────────────────
 # HuggingFace upload helper
-# Uses SFTP script upload instead of fragile python -c nested quoting.
 # ─────────────────────
 def upload_to_huggingface(ssh, hf_token, hf_repo, local_temp_dir=None):
     if not hf_token or not hf_repo:
