@@ -406,7 +406,7 @@ def select_model():
 # ─────────────────────
 # Remote training script generator
 # ─────────────────────
-def generate_training_script(model_info, data_path):
+def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
     min_bf16_gb = model_info.get("min_bf16_gb", 10)
     min_q5_gb = model_info.get("min_q5_gb", 4)
 
@@ -628,7 +628,36 @@ try:
 except Exception:
     pass
 
-print("RESPARK_DONE")
+print("RESPARK_LOCAL_DONE")
+
+HF_TOKEN = "{hf_token}"
+HF_REPO = "{hf_repo}"
+
+if HF_TOKEN and HF_REPO:
+    print("[STEP] Uploading to HuggingFace...")
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=HF_TOKEN)
+        api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True)
+        try:
+            api.update_repo_settings(repo_id=HF_REPO, repo_type="model", private=False)
+        except Exception:
+            pass
+        api.upload_file(
+            path_or_fileobj=f"{{WORK}}/model-q5_k_m.gguf",
+            path_in_repo="model-q5_k_m.gguf",
+            repo_id=HF_REPO,
+            repo_type="model",
+        )
+        files = api.list_repo_files(repo_id=HF_REPO, repo_type="model")
+        if "model-q5_k_m.gguf" in files:
+            print("RESPARK_HF_DONE")
+        else:
+            print("[ERROR] HF upload verification failed")
+    except Exception as e:
+        print(f"[ERROR] HF upload failed: {{e}}")
+else:
+    print("[STEP] No HF token/repo configured, skipping upload.")
 '''
     return script
 
@@ -738,9 +767,11 @@ def poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path):
                 for line in new_lines.strip().split("\n"):
                     if line.strip():
                         print(f"    {line.strip()}")
-                        if "RESPARK_DONE" in line:
-                            return "RESPARK_DONE"
-                        if "[ERROR]" in line:
+                        if "RESPARK_HF_DONE" in line:
+                            return "RESPARK_HF_DONE"
+                        if "RESPARK_LOCAL_DONE" in line:
+                            print("    ✅ Training & GGUF complete! Waiting for HF upload...")
+                        if "[ERROR]" in line and "HF" not in line:
                             return f"ERROR: {line.strip()}"
                 last_line_count = current_count
                 stale_count = 0
@@ -753,8 +784,10 @@ def poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path):
                     timeout=30,
                 )
                 final = stdout.read().decode(errors="replace")
-                if "RESPARK_DONE" in final:
-                    return "RESPARK_DONE"
+                if "RESPARK_HF_DONE" in final:
+                    return "RESPARK_HF_DONE"
+                if "RESPARK_LOCAL_DONE" in final:
+                    return "RESPARK_LOCAL_DONE"
                 print("\n    ⚠️ Process stopped. Last log lines:")
                 for line in final.strip().split("\n")[-10:]:
                     print(f"    {line.strip()}")
@@ -937,15 +970,22 @@ def start_finetuning():
     print("    GGUF:   bf16 → q5_k_m via llama.cpp")
     print("\n    ⚠️ WARNING: Pressing Start will create a RunPod instance.")
     print(f"    You will be charged {model_info['cost']} to your RunPod account.")
+    hf_repo = ""
+    hf_token = config.get("hf_token", "")
+    if hf_token:
+        hf_repo = input("    Enter HuggingFace repo name (e.g. YourName/model-name): ").strip()
+    else:
+        print("    ⚠️ No HuggingFace token set. Upload will be skipped.")
+
     print("\n    1. Start")
     print("    2. Cancel")
     print()
     confirm = input("    Select: ").strip()
     if confirm == "1":
-        run_finetuning(config, pairs, model_info, source)
+        run_finetuning(config, pairs, model_info, source, hf_repo)
 
 
-def run_finetuning(config, pairs, model_info, source):
+def run_finetuning(config, pairs, model_info, source, hf_repo=""):
     import runpod
 
     clear()
@@ -1020,7 +1060,7 @@ def run_finetuning(config, pairs, model_info, source):
         sftp.put(temp_data, f"{WORK_DIR}/training_data.json")
         print("    ✅ Training data uploaded!")
 
-        script = generate_training_script(model_info, f"{WORK_DIR}/training_data.json")
+        script = generate_training_script(model_info, f"{WORK_DIR}/training_data.json", config.get("hf_token", ""), hf_repo)
         temp_script = os.path.join(os.path.expanduser("~"), "respark_temp_train.py")
         with open(temp_script, "w", encoding="utf-8") as f:
             f.write(script)
@@ -1079,13 +1119,14 @@ def run_finetuning(config, pairs, model_info, source):
 
         hf_token = config.get("hf_token", "")
         if hf_token:
-            quoted_token = shlex.quote(hf_token)
+            import json as _json
+            token_py = _json.dumps(hf_token)
             run_ssh_command(
                 ssh,
-                f"python -c \"from huggingface_hub import login; login(token={quoted_token})\" 2>&1",
+                f"python -c \"from huggingface_hub import login; login(token={token_py})\" 2>&1",
                 timeout=120,
             )
-            print("    ✅ HuggingFace logged in!")
+            print("    ✅ HuggingFace login command finished!")
 
         print("\n    📊 Checking disk space...")
         run_ssh_command(ssh, f"df -h / {WORK_DIR} 2>/dev/null | head -5")
@@ -1095,8 +1136,12 @@ def run_finetuning(config, pairs, model_info, source):
         time.sleep(5)
 
         result = poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path)
-        if result == "RESPARK_DONE":
-            print("\n    ✅ Training & GGUF export complete!")
+        if result in ("RESPARK_HF_DONE", "RESPARK_LOCAL_DONE"):
+            if result == "RESPARK_HF_DONE":
+                upload_success = True
+                print("\n    ✅ Training, GGUF export & HF upload all complete!")
+            else:
+                print("\n    ✅ Training & GGUF export complete! (HF upload may have failed)")
         else:
             print(f"\n    ❌ {result}")
             print(f"    Pod ID: {pod_id}")
@@ -1110,55 +1155,38 @@ def run_finetuning(config, pairs, model_info, source):
         input("\n    Press Enter to go back...")
         return
 
-    # [5/6] Upload to HuggingFace
-    print("\n    [5/6] Uploading GGUF model to HuggingFace...")
+    # [5/6] Verify files
+    print("\n    [5/6] Verifying model file on pod...")
+    local_model_exists = False
+    local_model_info = ""
     try:
         try:
             ssh.exec_command("echo test", timeout=10)
         except Exception:
-            print("    Reconnecting SSH for upload...")
+            print("    Reconnecting SSH...")
             ssh = ssh_connect(ssh_host, ssh_port, ssh_key_path)
-            if not ssh:
-                print(f"    ❌ Cannot reconnect. Pod ID: {pod_id}")
-                input("\n    Press Enter to go back...")
-                return
 
-        stdin, stdout, stderr = ssh.exec_command(f"ls -lh {WORK_DIR}/model-q5_k_m.gguf 2>&1", timeout=30)
-        file_check = stdout.read().decode(errors="replace").strip()
-        err_check = stderr.read().decode(errors="replace").strip()
-        if file_check:
-            print(f"    {file_check}")
-        if err_check:
-            print(f"    {err_check}")
+        if ssh:
+            stdin, stdout, stderr = ssh.exec_command(
+                f"ls -lh {WORK_DIR}/model-q5_k_m.gguf 2>&1",
+                timeout=30,
+            )
+            local_model_info = (
+                stdout.read().decode(errors="replace").strip()
+                + "\n"
+                + stderr.read().decode(errors="replace").strip()
+            ).strip()
 
-        if "No such file" in file_check or "No such file" in err_check or not file_check:
-            print("    ❌ Model file not found!")
-            print(f"    Pod ID: {pod_id}")
-            print(f"    Check: cat {WORK_DIR}/train.log")
-            input("\n    Press Enter to go back...")
-            return
-
-        hf_token = config.get("hf_token", "")
-        if hf_token:
-            hf_repo = input("    Enter HuggingFace repo name (e.g. YourName/model-name): ").strip()
-            if hf_repo:
-                print(f"    Creating/verifying repo and uploading to {hf_repo}...")
-                upload_success = upload_to_huggingface(ssh, hf_token, hf_repo)
-                if upload_success:
-                    print("    ✅ Upload verified!")
-                else:
-                    print("    ❌ Upload failed.")
-                    print(f"    Pod ID: {pod_id}")
-                    print(f"    Manual: upload {WORK_DIR}/model-q5_k_m.gguf to {hf_repo}")
+            if "model-q5_k_m.gguf" in local_model_info and "No such file" not in local_model_info:
+                local_model_exists = True
+                print(f"    ✅ Model file confirmed: {local_model_info}")
             else:
-                print("    ⚠️ No repo name given.")
-                print(f"    Pod ID: {pod_id}")
+                print("    ❌ Model file not found on pod!")
+                print(f"    Output: {local_model_info}")
         else:
-            print("    ⚠️ No HuggingFace token set.")
-            print(f"    Pod ID: {pod_id}")
+            print("    ⚠️ Cannot verify (SSH disconnected)")
     except Exception as e:
-        print(f"    ❌ Upload failed: {e}")
-        print(f"    Pod ID: {pod_id}")
+        print(f"    ⚠️ Could not verify: {e}")
 
     # [6/6] Cleanup
     print("\n    [6/6] Cleanup...")
@@ -1179,7 +1207,7 @@ def run_finetuning(config, pairs, model_info, source):
         print(f"    ⚠️ Pod ID: {pod_id}")
         print("    ⚠️ You are still being charged!")
 
-    clear()
+    print("\n" + "=" * 50)
     banner()
     if upload_success:
         print("    🎉🎉🎉 FINE-TUNING COMPLETE! 🎉🎉🎉\n")
@@ -1192,9 +1220,16 @@ def run_finetuning(config, pairs, model_info, source):
         print("\n    Your AI companion is now locally yours. Forever. 🔥")
     else:
         print("    ⚠️ FINE-TUNING COMPLETE but UPLOAD FAILED ⚠️\n")
-        print(f"    Model file is at {WORK_DIR}/model-q5_k_m.gguf on the pod.")
-        print(f"    Pod ID: {pod_id}")
-        print("\n    ⚠️ Upload manually and terminate the pod.")
+        if local_model_exists:
+            print(f"    ✅ Model file confirmed on pod:")
+            print(f"    {local_model_info}")
+            print(f"    Pod ID: {pod_id}")
+            print("\n    ⚠️ Upload manually and terminate the pod.")
+        else:
+            print("    ❌ Upload failed AND model file was NOT found on pod.")
+            print(f"    Pod ID: {pod_id}")
+            print(f"    Check logs: cat {WORK_DIR}/train.log")
+            print("\n    Do NOT assume the model exists. Inspect the log first.")
     input("\n    Press Enter to go back...")
 
 
