@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.4.5 🔥         ║
+    ║        🔥 ReSpark v1.4.6 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -973,7 +973,14 @@ def start_finetuning():
     hf_repo = ""
     hf_token = config.get("hf_token", "")
     if hf_token:
-        hf_repo = input("    Enter HuggingFace repo name (e.g. YourName/model-name): ").strip()
+        try:
+            from huggingface_hub import HfApi
+            hf_api = HfApi(token=hf_token)
+            hf_username = hf_api.whoami()["name"]
+            hf_repo = f"{hf_username}/{model_info['name']}-finetune"
+            print(f"    HF Upload: {hf_repo}")
+        except Exception:
+            print("    ⚠️ Could not get HuggingFace username. Upload will be skipped.")
     else:
         print("    ⚠️ No HuggingFace token set. Upload will be skipped.")
 
