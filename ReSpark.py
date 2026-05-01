@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.4.3 🔥         ║
+    ║        🔥 ReSpark v1.4.5 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -1095,9 +1095,7 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
         print("    Installing Python packages...")
         install_commands = [
             "pip install --upgrade pip",
-            "pip install unsloth",
-            "pip install \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\" --force-reinstall --no-deps",
-            "pip install --upgrade unsloth_zoo --no-deps",
+            "pip install --upgrade --force-reinstall --no-cache-dir unsloth unsloth_zoo",
             "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
             "pip install --upgrade transformers",
             "pip install torchvision",
@@ -1119,11 +1117,9 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
 
         hf_token = config.get("hf_token", "")
         if hf_token:
-            import json as _json
-            token_py = _json.dumps(hf_token)
             run_ssh_command(
                 ssh,
-                f"python -c \"from huggingface_hub import login; login(token={token_py})\" 2>&1",
+                f"python -c 'from huggingface_hub import login; login(token=\"{hf_token}\")' 2>&1",
                 timeout=120,
             )
             print("    ✅ HuggingFace login command finished!")
