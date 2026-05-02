@@ -5,6 +5,46 @@ import time
 import re
 import shlex
 
+
+# Module-level: shared between detect_source() and parse_plaintext() so the
+# supported speaker names live in exactly one place.
+PLAINTEXT_SPEAKERS = (
+    "You|ChatGPT|Claude|Sonnet|Opus|Monday|Gemini|Grok|GPT|Assistant|Model"
+)
+PLAINTEXT_HEADER_RE = re.compile(rf"^(?P<name>{PLAINTEXT_SPEAKERS})\s+said:\s*$")
+PLAINTEXT_DETECT_RE = re.compile(rf"(?m)^(?:{PLAINTEXT_SPEAKERS})\s+said:\s*$")
+
+
+def _normalize_content(content):
+    """Coerce a message ``content`` field into a plain string.
+
+    Handles three common shapes encountered across providers:
+    - ``str`` — return as-is
+    - ``list`` of parts (Anthropic-style content blocks, OpenAI vision, etc.) —
+      concatenate the ``text`` field of any text-typed dicts and any bare strs
+    - ``dict`` with a ``text`` key — return that
+    Anything else falls back to ``str(content)``.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks = []
+        for part in content:
+            if isinstance(part, str):
+                chunks.append(part)
+            elif isinstance(part, dict):
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    chunks.append(part["text"])
+                elif isinstance(part.get("text"), str):
+                    chunks.append(part["text"])
+        return "".join(chunks)
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+    return str(content)
+
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".respark_config.json")
 WORK_DIR = "/workspace"
 
@@ -80,13 +120,20 @@ def detect_source(file_path):
                 return "grok", data
 
     lines = raw.strip().split("\n")
-    if len(lines) > 1:
+    if lines and lines[0].strip():
         try:
             first_line = json.loads(lines[0])
             if isinstance(first_line, dict) and ("role" in first_line or "content" in first_line):
                 return "grok_jsonl", lines
+            if isinstance(first_line, list) and len(first_line) > 0:
+                first_msg = first_line[0]
+                if isinstance(first_msg, dict) and "role" in first_msg and "content" in first_msg:
+                    return "jsonl_list", lines
         except Exception:
             pass
+
+    if PLAINTEXT_DETECT_RE.search(raw):
+        return "plaintext", raw
 
     return "unknown", data if data is not None else raw
 
@@ -226,6 +273,80 @@ def parse_grok_jsonl(lines):
                 prev_user = None
         except Exception:
             continue
+    return pairs
+
+
+def parse_jsonl_list(lines):
+    """Each line is a JSON list of {role, content} dicts (one conversation per line).
+
+    Common when exporting via API or storing curated SFT corpora.
+
+    ``content`` can be a plain string or a structured value (list of content
+    blocks, dict with a ``text`` key) — see ``_normalize_content``.
+    """
+    pairs = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            messages = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(messages, list):
+            continue
+        prev_user = None
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            text = _normalize_content(msg.get("content")).strip()
+            if not text:
+                continue
+            if role in ("user", "human"):
+                prev_user = text
+            elif role in ("assistant", "model", "ai") and prev_user:
+                pairs.append({"instruction": prev_user, "output": text})
+                prev_user = None
+    return pairs
+
+
+def parse_plaintext(raw):
+    """Plain-text conversation copy-pasted from a web UI.
+
+    Recognises headers like "You said:", "ChatGPT said:", "Monday said:",
+    "Claude said:", "Sonnet said:", "Opus said:", "Gemini said:", "Grok said:".
+    Anything not "You" is treated as the assistant role, which lets custom
+    GPTs (e.g. "Monday said:") parse correctly. Header pattern shared with
+    ``detect_source`` via ``PLAINTEXT_HEADER_RE``.
+    """
+    pairs = []
+    current_role = None
+    current_buf = []
+    prev_user = None
+
+    def flush():
+        nonlocal prev_user
+        if current_role is None:
+            return
+        text = "\n".join(current_buf).strip()
+        if not text:
+            return
+        if current_role == "user":
+            prev_user = text
+        elif current_role == "assistant" and prev_user:
+            pairs.append({"instruction": prev_user, "output": text})
+            prev_user = None
+
+    for line in raw.split("\n"):
+        m = PLAINTEXT_HEADER_RE.match(line.strip())
+        if m:
+            flush()
+            current_buf = []
+            current_role = "user" if m.group("name") == "You" else "assistant"
+        else:
+            current_buf.append(line)
+    flush()
     return pairs
 
 
@@ -933,6 +1054,10 @@ def start_finetuning():
         pairs = parse_grok(data)
     elif source == "grok_jsonl":
         pairs = parse_grok_jsonl(data)
+    elif source == "jsonl_list":
+        pairs = parse_jsonl_list(data)
+    elif source == "plaintext":
+        pairs = parse_plaintext(data)
     elif source == "ready (already cleaned)":
         pairs = data
     else:
