@@ -410,6 +410,17 @@ def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
     min_bf16_gb = model_info.get("min_bf16_gb", 10)
     min_q5_gb = model_info.get("min_q5_gb", 4)
 
+    # Chat template: E4B uses standard Gemma format, others use custom format
+    hf_id = model_info.get("hf_id", "")
+    if "e4b" in hf_id.lower():
+        turn_user_start = "<start_of_turn>user"
+        turn_end = "<end_of_turn>"
+        turn_model_start = "<start_of_turn>model"
+    else:
+        turn_user_start = "<|turn>user"
+        turn_end = "<turn|>"
+        turn_model_start = "<|turn>model"
+
     script = f'''
 import json
 import torch
@@ -484,7 +495,7 @@ try:
     from datasets import Dataset
 
     def format_prompt(example):
-        return {{"text": f"<|turn>user\\n{{example['instruction']}}<turn|>\\n<|turn>model\\n{{example['output']}}<turn|>"}}
+        return {{"text": f"{turn_user_start}\\n{{example['instruction']}}{turn_end}\\n{turn_model_start}\\n{{example['output']}}{turn_end}"}}
 
     dataset = Dataset.from_list(raw_data)
     dataset = dataset.map(format_prompt)
@@ -525,108 +536,145 @@ except Exception as e:
     print(f"[ERROR] Training failed: {{e}}")
     sys.exit(1)
 
-print("[STEP] Saving merged model...")
-if not check_disk(40, "merge model"):
-    sys.exit(1)
-try:
-    model.save_pretrained_merged(f"{{WORK}}/gguf_model", tokenizer)
-    print("[STEP] Merged model saved!")
-except Exception as e:
-    print(f"[ERROR] Failed to save merged model: {{e}}")
-    sys.exit(1)
+USE_DIRECT_GGUF = {"True" if "e4b" in hf_id.lower() else "False"}
 
-print("[STEP] Freeing disk space...")
-try:
-    if os.path.exists("/root/.cache/huggingface"):
-        shutil.rmtree("/root/.cache/huggingface")
-    if os.path.exists(f"{{WORK}}/output"):
-        shutil.rmtree(f"{{WORK}}/output")
-    print("[STEP] Disk space freed!")
-except Exception as e:
-    print(f"[WARN] Cleanup partial: {{e}}")
-
-print("[STEP] Converting to bf16 GGUF...")
-if not check_disk(30, "bf16 conversion"):
-    sys.exit(1)
-try:
-    subprocess.run(["pip", "uninstall", "torchvision", "-y"], capture_output=True, text=True)
-    subprocess.run(["pip", "install", "--upgrade", "transformers"], capture_output=True, text=True)
-
-    print("[STEP] Installing llama.cpp conversion requirements...")
-    req = f"{{WORK}}/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"
-    if os.path.exists(req):
-        run(["pip", "install", "-r", req], "Installing llama.cpp convert requirements")
-
-    convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
-    if not os.path.exists(convert_script):
-        print("[ERROR] llama.cpp convert script not found!")
+if USE_DIRECT_GGUF:
+    print("[STEP] Saving model directly as GGUF (q5_k_m) via unsloth...")
+    if not check_disk(10, "direct GGUF save"):
+        sys.exit(1)
+    try:
+        model.save_pretrained_gguf(f"{{WORK}}/model", tokenizer, quantization_method="q5_k_m")
+        import glob
+        # Search both in WORK dir and in model/ subdirectory
+        gguf_files = glob.glob(f"{{WORK}}/model*.gguf") + glob.glob(f"{{WORK}}/model/*.gguf") + glob.glob(f"{{WORK}}/model/**/*.gguf", recursive=True)
+        # Remove duplicates
+        gguf_files = list(set(gguf_files))
+        print(f"[DEBUG] Found GGUF files: {{gguf_files}}")
+        # Also list what's in model/ dir
+        model_dir = f"{{WORK}}/model"
+        if os.path.isdir(model_dir):
+            print(f"[DEBUG] Files in {{model_dir}}/: {{os.listdir(model_dir)}}")
+        if not gguf_files:
+            print("[ERROR] No GGUF file created!")
+            # Last resort: search everywhere in WORK
+            all_gguf = glob.glob(f"{{WORK}}/**/*.gguf", recursive=True)
+            print(f"[DEBUG] All GGUF files in workspace: {{all_gguf}}")
+            sys.exit(1)
+        target = f"{{WORK}}/model-q5_k_m.gguf"
+        if gguf_files[0] != target:
+            shutil.move(gguf_files[0], target)
+        q5_size = os.path.getsize(target) / (1024**3)
+        print(f"[STEP] q5_k_m GGUF created! ({{q5_size:.1f}}GB)")
+        if q5_size < MIN_Q5_GB:
+            print(f"[ERROR] GGUF too small! Expected at least {{MIN_Q5_GB}}GB but got {{q5_size:.1f}}GB")
+            sys.exit(1)
+        print("[STEP] Direct GGUF save complete!")
+    except Exception as e:
+        print(f"[ERROR] Direct GGUF save failed: {{e}}")
+        sys.exit(1)
+else:
+    print("[STEP] Saving merged model...")
+    if not check_disk(40, "merge model"):
+        sys.exit(1)
+    try:
+        model.save_pretrained_merged(f"{{WORK}}/gguf_model", tokenizer)
+        print("[STEP] Merged model saved!")
+    except Exception as e:
+        print(f"[ERROR] Failed to save merged model: {{e}}")
         sys.exit(1)
 
-    run([
-        "python", convert_script,
-        f"{{WORK}}/gguf_model",
-        "--outfile", f"{{WORK}}/model-bf16.gguf",
-        "--outtype", "bf16",
-    ], "Converting HF model to bf16 GGUF", timeout=3600)
+    print("[STEP] Freeing disk space...")
+    try:
+        if os.path.exists("/root/.cache/huggingface"):
+            shutil.rmtree("/root/.cache/huggingface")
+        if os.path.exists(f"{{WORK}}/output"):
+            shutil.rmtree(f"{{WORK}}/output")
+        print("[STEP] Disk space freed!")
+    except Exception as e:
+        print(f"[WARN] Cleanup partial: {{e}}")
 
-    if not os.path.exists(f"{{WORK}}/model-bf16.gguf"):
-        print("[ERROR] bf16 GGUF file not created!")
+    print("[STEP] Converting to bf16 GGUF...")
+    if not check_disk(30, "bf16 conversion"):
+        sys.exit(1)
+    try:
+        subprocess.run(["pip", "uninstall", "torchvision", "-y"], capture_output=True, text=True)
+        subprocess.run(["pip", "install", "--upgrade", "transformers"], capture_output=True, text=True)
+
+        print("[STEP] Installing llama.cpp conversion requirements...")
+        req = f"{{WORK}}/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"
+        if os.path.exists(req):
+            run(["pip", "install", "-r", req], "Installing llama.cpp convert requirements")
+
+        convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
+        if not os.path.exists(convert_script):
+            print("[ERROR] llama.cpp convert script not found!")
+            sys.exit(1)
+
+        run([
+            "python", convert_script,
+            f"{{WORK}}/gguf_model",
+            "--outfile", f"{{WORK}}/model-bf16.gguf",
+            "--outtype", "bf16",
+        ], "Converting HF model to bf16 GGUF", timeout=3600)
+
+        if not os.path.exists(f"{{WORK}}/model-bf16.gguf"):
+            print("[ERROR] bf16 GGUF file not created!")
+            sys.exit(1)
+
+        bf16_size = os.path.getsize(f"{{WORK}}/model-bf16.gguf") / (1024**3)
+        print(f"[STEP] bf16 GGUF created! ({{bf16_size:.1f}}GB)")
+        if bf16_size < MIN_BF16_GB:
+            print(f"[ERROR] bf16 GGUF too small! Expected at least {{MIN_BF16_GB}}GB but got {{bf16_size:.1f}}GB")
+            print("[ERROR] This likely means the conversion was incomplete.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] bf16 conversion failed: {{e}}")
         sys.exit(1)
 
-    bf16_size = os.path.getsize(f"{{WORK}}/model-bf16.gguf") / (1024**3)
-    print(f"[STEP] bf16 GGUF created! ({{bf16_size:.1f}}GB)")
-    if bf16_size < MIN_BF16_GB:
-        print(f"[ERROR] bf16 GGUF too small! Expected at least {{MIN_BF16_GB}}GB but got {{bf16_size:.1f}}GB")
-        print("[ERROR] This likely means the conversion was incomplete.")
+    print("[STEP] Removing merged model to free space...")
+    try:
+        if os.path.exists(f"{{WORK}}/gguf_model"):
+            shutil.rmtree(f"{{WORK}}/gguf_model")
+        print("[STEP] Merged model removed!")
+    except Exception as e:
+        print(f"[WARN] Cleanup partial: {{e}}")
+
+    print("[STEP] Quantizing to q5_k_m...")
+    if not check_disk(15, "q5_k_m quantization"):
         sys.exit(1)
-except Exception as e:
-    print(f"[ERROR] bf16 conversion failed: {{e}}")
-    sys.exit(1)
+    try:
+        quantize_bin = f"{{WORK}}/llama.cpp/build/bin/llama-quantize"
+        if not os.path.exists(quantize_bin):
+            print("[ERROR] llama-quantize not found!")
+            sys.exit(1)
 
-print("[STEP] Removing merged model to free space...")
-try:
-    if os.path.exists(f"{{WORK}}/gguf_model"):
-        shutil.rmtree(f"{{WORK}}/gguf_model")
-    print("[STEP] Merged model removed!")
-except Exception as e:
-    print(f"[WARN] Cleanup partial: {{e}}")
+        run([
+            quantize_bin,
+            f"{{WORK}}/model-bf16.gguf",
+            f"{{WORK}}/model-q5_k_m.gguf",
+            "q5_k_m",
+        ], "Quantizing bf16 GGUF to q5_k_m", timeout=3600)
 
-print("[STEP] Quantizing to q5_k_m...")
-if not check_disk(15, "q5_k_m quantization"):
-    sys.exit(1)
-try:
-    quantize_bin = f"{{WORK}}/llama.cpp/build/bin/llama-quantize"
-    if not os.path.exists(quantize_bin):
-        print("[ERROR] llama-quantize not found!")
+        if not os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
+            print("[ERROR] q5_k_m GGUF file not created!")
+            sys.exit(1)
+
+        q5_size = os.path.getsize(f"{{WORK}}/model-q5_k_m.gguf") / (1024**3)
+        print(f"[STEP] q5_k_m GGUF created! ({{q5_size:.1f}}GB)")
+        if q5_size < MIN_Q5_GB:
+            print(f"[ERROR] q5_k_m GGUF too small! Expected at least {{MIN_Q5_GB}}GB but got {{q5_size:.1f}}GB")
+            print("[ERROR] This likely means the quantization was incomplete.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] Quantization failed: {{e}}")
         sys.exit(1)
 
-    run([
-        quantize_bin,
-        f"{{WORK}}/model-bf16.gguf",
-        f"{{WORK}}/model-q5_k_m.gguf",
-        "q5_k_m",
-    ], "Quantizing bf16 GGUF to q5_k_m", timeout=3600)
-
-    if not os.path.exists(f"{{WORK}}/model-q5_k_m.gguf"):
-        print("[ERROR] q5_k_m GGUF file not created!")
-        sys.exit(1)
-
-    q5_size = os.path.getsize(f"{{WORK}}/model-q5_k_m.gguf") / (1024**3)
-    print(f"[STEP] q5_k_m GGUF created! ({{q5_size:.1f}}GB)")
-    if q5_size < MIN_Q5_GB:
-        print(f"[ERROR] q5_k_m GGUF too small! Expected at least {{MIN_Q5_GB}}GB but got {{q5_size:.1f}}GB")
-        print("[ERROR] This likely means the quantization was incomplete.")
-        sys.exit(1)
-except Exception as e:
-    print(f"[ERROR] Quantization failed: {{e}}")
-    sys.exit(1)
-
-try:
-    if os.path.exists(f"{{WORK}}/model-bf16.gguf"):
-        os.remove(f"{{WORK}}/model-bf16.gguf")
-        print("[STEP] bf16 file cleaned up!")
-except Exception:
-    pass
+    try:
+        if os.path.exists(f"{{WORK}}/model-bf16.gguf"):
+            os.remove(f"{{WORK}}/model-bf16.gguf")
+            print("[STEP] bf16 file cleaned up!")
+    except Exception:
+        pass
 
 print("RESPARK_LOCAL_DONE")
 
