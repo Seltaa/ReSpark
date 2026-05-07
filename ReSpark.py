@@ -545,24 +545,48 @@ if USE_DIRECT_GGUF:
     try:
         model.save_pretrained_gguf(f"{{WORK}}/model", tokenizer, quantization_method="q5_k_m")
         import glob
-        # Search both in WORK dir and in model/ subdirectory
-        gguf_files = glob.glob(f"{{WORK}}/model*.gguf") + glob.glob(f"{{WORK}}/model/*.gguf") + glob.glob(f"{{WORK}}/model/**/*.gguf", recursive=True)
+        # Search in WORK dir, model/ subdir, and model_gguf/ (where Unsloth often saves)
+        gguf_files = (
+            glob.glob(f"{{WORK}}/model*.gguf")
+            + glob.glob(f"{{WORK}}/model/*.gguf")
+            + glob.glob(f"{{WORK}}/model/**/*.gguf", recursive=True)
+            + glob.glob(f"{{WORK}}/model_gguf/*.gguf")
+            + glob.glob(f"{{WORK}}/model_gguf/**/*.gguf", recursive=True)
+        )
         # Remove duplicates
         gguf_files = list(set(gguf_files))
         print(f"[DEBUG] Found GGUF files: {{gguf_files}}")
-        # Also list what's in model/ dir
-        model_dir = f"{{WORK}}/model"
-        if os.path.isdir(model_dir):
-            print(f"[DEBUG] Files in {{model_dir}}/: {{os.listdir(model_dir)}}")
+        # Also list what's in model/ and model_gguf/ dirs
+        for check_dir in [f"{{WORK}}/model", f"{{WORK}}/model_gguf"]:
+            if os.path.isdir(check_dir):
+                print(f"[DEBUG] Files in {{check_dir}}/: {{os.listdir(check_dir)}}")
         if not gguf_files:
-            print("[ERROR] No GGUF file created!")
-            # Last resort: search everywhere in WORK
-            all_gguf = glob.glob(f"{{WORK}}/**/*.gguf", recursive=True)
-            print(f"[DEBUG] All GGUF files in workspace: {{all_gguf}}")
-            sys.exit(1)
+            print("[WARN] No GGUF found in expected dirs. Searching entire workspace...")
+            gguf_files = glob.glob(f"{{WORK}}/**/*.gguf", recursive=True)
+            print(f"[DEBUG] All GGUF files in workspace: {{gguf_files}}")
+            if not gguf_files:
+                print("[ERROR] No GGUF file created anywhere!")
+                sys.exit(1)
+        # Separate Q5_K_M model from mmproj/other files
+        q5_files = [f for f in gguf_files if "q5_k_m" in f.lower() or "Q5_K_M" in f]
+        mmproj_files = [f for f in gguf_files if "mmproj" in f.lower()]
+        if not q5_files:
+            # Fallback: pick largest non-mmproj GGUF
+            non_mmproj = [f for f in gguf_files if "mmproj" not in f.lower()]
+            if non_mmproj:
+                q5_files = sorted(non_mmproj, key=lambda f: os.path.getsize(f), reverse=True)
+            else:
+                q5_files = gguf_files
         target = f"{{WORK}}/model-q5_k_m.gguf"
-        if gguf_files[0] != target:
-            shutil.move(gguf_files[0], target)
+        if q5_files[0] != target:
+            shutil.copy2(q5_files[0], target)
+            print(f"[STEP] Copied {{q5_files[0]}} -> {{target}}")
+        # Also copy mmproj if exists (for multimodal models)
+        if mmproj_files:
+            mmproj_target = f"{{WORK}}/model-mmproj.gguf"
+            if mmproj_files[0] != mmproj_target:
+                shutil.copy2(mmproj_files[0], mmproj_target)
+                print(f"[STEP] Copied mmproj: {{mmproj_files[0]}} -> {{mmproj_target}}")
         q5_size = os.path.getsize(target) / (1024**3)
         print(f"[STEP] q5_k_m GGUF created! ({{q5_size:.1f}}GB)")
         if q5_size < MIN_Q5_GB:
@@ -697,6 +721,17 @@ if HF_TOKEN and HF_REPO:
             repo_id=HF_REPO,
             repo_type="model",
         )
+        # Also upload mmproj if it exists (for multimodal models)
+        mmproj_path = f"{{WORK}}/model-mmproj.gguf"
+        if os.path.exists(mmproj_path):
+            print("[STEP] Uploading mmproj (multimodal projector)...")
+            api.upload_file(
+                path_or_fileobj=mmproj_path,
+                path_in_repo="model-mmproj.gguf",
+                repo_id=HF_REPO,
+                repo_type="model",
+            )
+            print("[STEP] mmproj uploaded!")
         files = api.list_repo_files(repo_id=HF_REPO, repo_type="model")
         if "model-q5_k_m.gguf" in files:
             print("RESPARK_HF_DONE")
