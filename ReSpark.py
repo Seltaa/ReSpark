@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.4.6 🔥         ║
+    ║        🔥 ReSpark v1.5.0 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -323,16 +323,6 @@ MODEL_INFO = {
         "min_q5_gb": 15,
     },
     "4": {
-        "name": "gemma-4-e4b",
-        "gpu": "NVIDIA RTX A5000",
-        "gpu_label": "A5000 24GB",
-        "cost": "~$0.50/hr",
-        "hf_id": "google/gemma-4-E4B-it",
-        "vram": 24,
-        "min_bf16_gb": 6,
-        "min_q5_gb": 2,
-    },
-    "5": {
         "name": "qwen-32b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -342,7 +332,7 @@ MODEL_INFO = {
         "min_bf16_gb": 45,
         "min_q5_gb": 18,
     },
-    "6": {
+    "5": {
         "name": "qwen-14b",
         "gpu": "NVIDIA RTX A5000",
         "gpu_label": "A5000 24GB",
@@ -352,7 +342,27 @@ MODEL_INFO = {
         "min_bf16_gb": 20,
         "min_q5_gb": 7,
     },
+    "6": {
+        "name": "qwen3.5-9b",
+        "gpu": "NVIDIA RTX A5000",
+        "gpu_label": "A5000 24GB",
+        "cost": "~$0.50/hr",
+        "hf_id": "Qwen/Qwen3.5-9B",
+        "vram": 24,
+        "min_bf16_gb": 14,
+        "min_q5_gb": 5,
+    },
     "7": {
+        "name": "qwen3.5-4b",
+        "gpu": "NVIDIA RTX A5000",
+        "gpu_label": "A5000 24GB",
+        "cost": "~$0.50/hr",
+        "hf_id": "Qwen/Qwen3.5-4B",
+        "vram": 24,
+        "min_bf16_gb": 7,
+        "min_q5_gb": 2,
+    },
+    "8": {
         "name": "llama-70b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -362,7 +372,7 @@ MODEL_INFO = {
         "min_bf16_gb": 95,
         "min_q5_gb": 35,
     },
-    "8": {
+    "9": {
         "name": "llama-8b",
         "gpu": "NVIDIA RTX A5000",
         "gpu_label": "A5000 24GB",
@@ -372,7 +382,7 @@ MODEL_INFO = {
         "min_bf16_gb": 10,
         "min_q5_gb": 3,
     },
-    "9": {
+    "10": {
         "name": "mistral-24b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -392,12 +402,13 @@ def select_model():
     print("    1. Gemma 4 31B          [A100 80GB ~$1.60/hr] (official)")
     print("    2. Gemma 4 31B crack    [A100 80GB ~$1.60/hr] (abliterated)")
     print("    3. Gemma 4 26B A4B      [A100 80GB ~$1.60/hr] (MoE, recommended)")
-    print("    4. Gemma 4 E4B          [A5000 24GB ~$0.50/hr]")
-    print("    5. Qwen 32B             [A100 80GB ~$1.60/hr]")
-    print("    6. Qwen 14B             [A5000 24GB ~$0.50/hr]")
-    print("    7. Llama 70B            [A100 80GB ~$1.60/hr]")
-    print("    8. Llama 8B             [A5000 24GB ~$0.50/hr]")
-    print("    9. Mistral 24B          [A100 80GB ~$1.60/hr]")
+    print("    4. Qwen 32B             [A100 80GB ~$1.60/hr]")
+    print("    5. Qwen 14B             [A5000 24GB ~$0.50/hr]")
+    print("    6. Qwen3.5 9B           [A5000 24GB ~$0.50/hr] (NEW)")
+    print("    7. Qwen3.5 4B           [A5000 24GB ~$0.50/hr] (NEW, lightweight)")
+    print("    8. Llama 70B            [A100 80GB ~$1.60/hr]")
+    print("    9. Llama 8B             [A5000 24GB ~$0.50/hr]")
+    print("   10. Mistral 24B          [A100 80GB ~$1.60/hr]")
     print()
     choice = input("    Select: ").strip()
     return MODEL_INFO.get(choice)
@@ -410,12 +421,20 @@ def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
     min_bf16_gb = model_info.get("min_bf16_gb", 10)
     min_q5_gb = model_info.get("min_q5_gb", 4)
 
-    # Chat template: E4B uses standard Gemma format, others use custom format
+    # Chat template: model-specific format
     hf_id = model_info.get("hf_id", "")
-    if "e4b" in hf_id.lower():
-        turn_user_start = "<start_of_turn>user"
-        turn_end = "<end_of_turn>"
-        turn_model_start = "<start_of_turn>model"
+    if "qwen" in hf_id.lower():
+        turn_user_start = "<|im_start|>user"
+        turn_end = "<|im_end|>"
+        turn_model_start = "<|im_start|>assistant"
+    elif "llama" in hf_id.lower():
+        turn_user_start = "<|start_header_id|>user<|end_header_id|>\\n\\n"
+        turn_end = "<|eot_id|>"
+        turn_model_start = "<|start_header_id|>assistant<|end_header_id|>\\n\\n"
+    elif "mistral" in hf_id.lower():
+        turn_user_start = "[INST]"
+        turn_end = "[/INST]"
+        turn_model_start = ""
     else:
         turn_user_start = "<|turn>user"
         turn_end = "<turn|>"
@@ -536,7 +555,7 @@ except Exception as e:
     print(f"[ERROR] Training failed: {{e}}")
     sys.exit(1)
 
-USE_DIRECT_GGUF = {"True" if "e4b" in hf_id.lower() else "False"}
+USE_DIRECT_GGUF = False
 
 if USE_DIRECT_GGUF:
     print("[STEP] Saving model directly as GGUF (q5_k_m) via unsloth...")
