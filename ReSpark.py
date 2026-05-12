@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.5.0 🔥         ║
+    ║        🔥 ReSpark v1.5.1 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -290,6 +290,7 @@ def clean_training_data(pairs):
 # Models
 # min_bf16_gb / min_q5_gb are rough safety floors.
 # They are intentionally conservative enough to catch incomplete conversions.
+# is_moe: MoE models need 16-bit LoRA instead of QLoRA (4-bit)
 # ─────────────────────
 MODEL_INFO = {
     "1": {
@@ -321,6 +322,7 @@ MODEL_INFO = {
         "vram": 80,
         "min_bf16_gb": 40,
         "min_q5_gb": 15,
+        "is_moe": True,
     },
     "4": {
         "name": "qwen-32b",
@@ -392,6 +394,27 @@ MODEL_INFO = {
         "min_bf16_gb": 30,
         "min_q5_gb": 12,
     },
+    "11": {
+        "name": "qwen3.6-27b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "A100 80GB",
+        "cost": "~$1.60/hr",
+        "hf_id": "Qwen/Qwen3.6-27B",
+        "vram": 80,
+        "min_bf16_gb": 40,
+        "min_q5_gb": 15,
+    },
+    "12": {
+        "name": "qwen3.6-35b-a3b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "A100 80GB",
+        "cost": "~$1.60/hr",
+        "hf_id": "Qwen/Qwen3.6-35B-A3B",
+        "vram": 80,
+        "min_bf16_gb": 45,
+        "min_q5_gb": 18,
+        "is_moe": True,
+    },
 }
 
 
@@ -399,13 +422,19 @@ def select_model():
     clear()
     banner()
     print("    🤖 Select base model:\n")
+    print("    ── Gemma 4 ──")
     print("    1. Gemma 4 31B          [A100 80GB ~$1.60/hr] (official)")
     print("    2. Gemma 4 31B crack    [A100 80GB ~$1.60/hr] (abliterated)")
-    print("    3. Gemma 4 26B A4B      [A100 80GB ~$1.60/hr] (MoE, recommended)")
+    print("    3. Gemma 4 26B A4B      [A100 80GB ~$1.60/hr] (MoE, auto 16-bit LoRA)")
+    print("    ── Qwen ──")
     print("    4. Qwen 32B             [A100 80GB ~$1.60/hr]")
     print("    5. Qwen 14B             [A5000 24GB ~$0.50/hr]")
-    print("    6. Qwen3.5 9B           [A5000 24GB ~$0.50/hr] (NEW)")
-    print("    7. Qwen3.5 4B           [A5000 24GB ~$0.50/hr] (NEW, lightweight)")
+    print("    6. Qwen3.5 9B           [A5000 24GB ~$0.50/hr]")
+    print("    7. Qwen3.5 4B           [A5000 24GB ~$0.50/hr] (lightweight)")
+    print("    ── Qwen 3.6 (NEW) ──")
+    print("   11. Qwen3.6 27B          [A100 80GB ~$1.60/hr] (dense, recommended! 🔥)")
+    print("   12. Qwen3.6 35B A3B      [A100 80GB ~$1.60/hr] (MoE, auto 16-bit LoRA)")
+    print("    ── Others ──")
     print("    8. Llama 70B            [A100 80GB ~$1.60/hr]")
     print("    9. Llama 8B             [A5000 24GB ~$0.50/hr]")
     print("   10. Mistral 24B          [A100 80GB ~$1.60/hr]")
@@ -420,6 +449,14 @@ def select_model():
 def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
     min_bf16_gb = model_info.get("min_bf16_gb", 10)
     min_q5_gb = model_info.get("min_q5_gb", 4)
+
+    # MoE detection: use 16-bit LoRA instead of QLoRA for MoE models
+    is_moe = model_info.get("is_moe", False)
+
+    if is_moe:
+        load_mode = "load_in_4bit=False,\n        load_in_16bit=True,"
+    else:
+        load_mode = "load_in_4bit=True,"
 
     # Chat template: model-specific format
     hf_id = model_info.get("hf_id", "")
@@ -488,7 +525,7 @@ try:
     model, tokenizer = FastModel.from_pretrained(
         model_name="{model_info['hf_id']}",
         max_seq_length=2048,
-        load_in_4bit=True,
+        {load_mode}
     )
     model = FastModel.get_peft_model(
         model,
@@ -564,7 +601,6 @@ if USE_DIRECT_GGUF:
     try:
         model.save_pretrained_gguf(f"{{WORK}}/model", tokenizer, quantization_method="q5_k_m")
         import glob
-        # Search in WORK dir, model/ subdir, and model_gguf/ (where Unsloth often saves)
         gguf_files = (
             glob.glob(f"{{WORK}}/model*.gguf")
             + glob.glob(f"{{WORK}}/model/*.gguf")
@@ -572,10 +608,8 @@ if USE_DIRECT_GGUF:
             + glob.glob(f"{{WORK}}/model_gguf/*.gguf")
             + glob.glob(f"{{WORK}}/model_gguf/**/*.gguf", recursive=True)
         )
-        # Remove duplicates
         gguf_files = list(set(gguf_files))
         print(f"[DEBUG] Found GGUF files: {{gguf_files}}")
-        # Also list what's in model/ and model_gguf/ dirs
         for check_dir in [f"{{WORK}}/model", f"{{WORK}}/model_gguf"]:
             if os.path.isdir(check_dir):
                 print(f"[DEBUG] Files in {{check_dir}}/: {{os.listdir(check_dir)}}")
@@ -586,11 +620,9 @@ if USE_DIRECT_GGUF:
             if not gguf_files:
                 print("[ERROR] No GGUF file created anywhere!")
                 sys.exit(1)
-        # Separate Q5_K_M model from mmproj/other files
         q5_files = [f for f in gguf_files if "q5_k_m" in f.lower() or "Q5_K_M" in f]
         mmproj_files = [f for f in gguf_files if "mmproj" in f.lower()]
         if not q5_files:
-            # Fallback: pick largest non-mmproj GGUF
             non_mmproj = [f for f in gguf_files if "mmproj" not in f.lower()]
             if non_mmproj:
                 q5_files = sorted(non_mmproj, key=lambda f: os.path.getsize(f), reverse=True)
@@ -600,7 +632,6 @@ if USE_DIRECT_GGUF:
         if q5_files[0] != target:
             shutil.copy2(q5_files[0], target)
             print(f"[STEP] Copied {{q5_files[0]}} -> {{target}}")
-        # Also copy mmproj if exists (for multimodal models)
         if mmproj_files:
             mmproj_target = f"{{WORK}}/model-mmproj.gguf"
             if mmproj_files[0] != mmproj_target:
@@ -740,7 +771,6 @@ if HF_TOKEN and HF_REPO:
             repo_id=HF_REPO,
             repo_type="model",
         )
-        # Also upload mmproj if it exists (for multimodal models)
         mmproj_path = f"{{WORK}}/model-mmproj.gguf"
         if os.path.exists(mmproj_path):
             print("[STEP] Uploading mmproj (multimodal projector)...")
@@ -1069,6 +1099,10 @@ def start_finetuning():
     print(f"    Model:  {model_info['name']}")
     print(f"    GPU:    {model_info['gpu_label']}")
     print(f"    Cost:   {model_info['cost']}")
+    if model_info.get("is_moe"):
+        print("    LoRA:   16-bit (MoE model detected)")
+    else:
+        print("    LoRA:   QLoRA 4-bit")
     print("    GGUF:   bf16 → q5_k_m via llama.cpp")
     print("\n    ⚠️ WARNING: Pressing Start will create a RunPod instance.")
     print(f"    You will be charged {model_info['cost']} to your RunPod account.")
@@ -1104,6 +1138,10 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
     print(f"    Model: {model_info['name']}")
     print(f"    GPU:   {model_info['gpu_label']}")
     print(f"    Cost:  {model_info['cost']}")
+    if model_info.get("is_moe"):
+        print(f"    Mode:  16-bit LoRA (MoE)")
+    else:
+        print(f"    Mode:  QLoRA 4-bit")
     print()
 
     pod_id = None
