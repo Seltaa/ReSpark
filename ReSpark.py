@@ -365,36 +365,6 @@ MODEL_INFO = {
         "min_q5_gb": 2,
     },
     "8": {
-        "name": "llama-70b",
-        "gpu": "NVIDIA A100 80GB PCIe",
-        "gpu_label": "A100 80GB",
-        "cost": "~$1.60/hr",
-        "hf_id": "meta-llama/Llama-3.1-70B-Instruct",
-        "vram": 80,
-        "min_bf16_gb": 95,
-        "min_q5_gb": 35,
-    },
-    "9": {
-        "name": "llama-8b",
-        "gpu": "NVIDIA RTX A5000",
-        "gpu_label": "A5000 24GB",
-        "cost": "~$0.50/hr",
-        "hf_id": "meta-llama/Llama-3.1-8B-Instruct",
-        "vram": 24,
-        "min_bf16_gb": 10,
-        "min_q5_gb": 3,
-    },
-    "10": {
-        "name": "mistral-24b",
-        "gpu": "NVIDIA A100 80GB PCIe",
-        "gpu_label": "A100 80GB",
-        "cost": "~$1.60/hr",
-        "hf_id": "mistralai/Mistral-Small-24B-Instruct-2501",
-        "vram": 80,
-        "min_bf16_gb": 30,
-        "min_q5_gb": 12,
-    },
-    "11": {
         "name": "qwen3.6-27b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -404,7 +374,7 @@ MODEL_INFO = {
         "min_bf16_gb": 40,
         "min_q5_gb": 15,
     },
-    "12": {
+    "9": {
         "name": "qwen3.6-35b-a3b",
         "gpu": "NVIDIA A100 80GB PCIe",
         "gpu_label": "A100 80GB",
@@ -415,6 +385,36 @@ MODEL_INFO = {
         "min_q5_gb": 18,
         "is_moe": True,
     },
+    "10": {
+        "name": "llama-70b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "A100 80GB",
+        "cost": "~$1.60/hr",
+        "hf_id": "meta-llama/Llama-3.1-70B-Instruct",
+        "vram": 80,
+        "min_bf16_gb": 95,
+        "min_q5_gb": 35,
+    },
+    "11": {
+        "name": "llama-8b",
+        "gpu": "NVIDIA RTX A5000",
+        "gpu_label": "A5000 24GB",
+        "cost": "~$0.50/hr",
+        "hf_id": "meta-llama/Llama-3.1-8B-Instruct",
+        "vram": 24,
+        "min_bf16_gb": 10,
+        "min_q5_gb": 3,
+    },
+    "12": {
+        "name": "mistral-24b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "A100 80GB",
+        "cost": "~$1.60/hr",
+        "hf_id": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "vram": 80,
+        "min_bf16_gb": 30,
+        "min_q5_gb": 12,
+    },
 }
 
 
@@ -423,21 +423,20 @@ def select_model():
     banner()
     print("    🤖 Select base model:\n")
     print("    ── Gemma 4 ──")
-    print("    1. Gemma 4 31B          [A100 80GB ~$1.60/hr] (official)")
-    print("    2. Gemma 4 31B crack    [A100 80GB ~$1.60/hr] (abliterated)")
-    print("    3. Gemma 4 26B A4B      [A100 80GB ~$1.60/hr] (MoE, auto 16-bit LoRA)")
+    print("     1. Gemma 4 31B          [A100 80GB ~$1.60/hr] (official)")
+    print("     2. Gemma 4 31B crack    [A100 80GB ~$1.60/hr] (abliterated)")
+    print("     3. Gemma 4 26B A4B      [A100 80GB ~$1.60/hr] (MoE, auto 16-bit LoRA)")
     print("    ── Qwen ──")
-    print("    4. Qwen 32B             [A100 80GB ~$1.60/hr]")
-    print("    5. Qwen 14B             [A5000 24GB ~$0.50/hr]")
-    print("    6. Qwen3.5 9B           [A5000 24GB ~$0.50/hr]")
-    print("    7. Qwen3.5 4B           [A5000 24GB ~$0.50/hr] (lightweight)")
-    print("    ── Qwen 3.6 (NEW) ──")
-    print("   11. Qwen3.6 27B          [A100 80GB ~$1.60/hr] (dense, recommended! 🔥)")
-    print("   12. Qwen3.6 35B A3B      [A100 80GB ~$1.60/hr] (MoE, auto 16-bit LoRA)")
+    print("     4. Qwen 32B             [A100 80GB ~$1.60/hr]")
+    print("     5. Qwen 14B             [A5000 24GB ~$0.50/hr]")
+    print("     6. Qwen3.5 9B           [A5000 24GB ~$0.50/hr]")
+    print("     7. Qwen3.5 4B           [A5000 24GB ~$0.50/hr] (lightweight)")
+    print("     8. Qwen3.6 27B          [A100 80GB ~$1.60/hr] (dense, recommended! 🔥)")
+    print("     9. Qwen3.6 35B A3B      [A100 80GB ~$1.60/hr] (MoE, auto 16-bit LoRA)")
     print("    ── Others ──")
-    print("    8. Llama 70B            [A100 80GB ~$1.60/hr]")
-    print("    9. Llama 8B             [A5000 24GB ~$0.50/hr]")
-    print("   10. Mistral 24B          [A100 80GB ~$1.60/hr]")
+    print("    10. Llama 70B            [A100 80GB ~$1.60/hr]")
+    print("    11. Llama 8B             [A5000 24GB ~$0.50/hr]")
+    print("    12. Mistral 24B          [A100 80GB ~$1.60/hr]")
     print()
     choice = input("    Select: ").strip()
     return MODEL_INFO.get(choice)
