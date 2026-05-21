@@ -415,6 +415,40 @@ MODEL_INFO = {
         "min_bf16_gb": 30,
         "min_q5_gb": 12,
     },
+    # ── Multi-GPU Models ──
+    "13": {
+        "name": "qwen-72b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "2x A100 80GB",
+        "cost": "~$3.20/hr",
+        "hf_id": "Qwen/Qwen2.5-72B-Instruct",
+        "vram": 160,
+        "min_bf16_gb": 100,
+        "min_q5_gb": 40,
+        "gpu_count": 2,
+    },
+    "14": {
+        "name": "llama-70b-multi",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "2x A100 80GB",
+        "cost": "~$3.20/hr",
+        "hf_id": "meta-llama/Llama-3.1-70B-Instruct",
+        "vram": 160,
+        "min_bf16_gb": 95,
+        "min_q5_gb": 35,
+        "gpu_count": 2,
+    },
+    "15": {
+        "name": "llama-405b",
+        "gpu": "NVIDIA A100 80GB PCIe",
+        "gpu_label": "4x A100 80GB",
+        "cost": "~$6.40/hr",
+        "hf_id": "meta-llama/Llama-3.1-405B-Instruct",
+        "vram": 320,
+        "min_bf16_gb": 500,
+        "min_q5_gb": 200,
+        "gpu_count": 4,
+    },
 }
 
 
@@ -437,6 +471,10 @@ def select_model():
     print("    10. Llama 70B            [A100 80GB ~$1.60/hr]")
     print("    11. Llama 8B             [A5000 24GB ~$0.50/hr]")
     print("    12. Mistral 24B          [A100 80GB ~$1.60/hr]")
+    print("    ── Multi-GPU (large models) ──")
+    print("    13. Qwen 72B             [2x A100 80GB ~$3.20/hr] ⚡")
+    print("    14. Llama 70B (2xGPU)    [2x A100 80GB ~$3.20/hr] (higher quality)")
+    print("    15. Llama 405B           [4x A100 80GB ~$6.40/hr] (experimental) ⚡")
     print()
     choice = input("    Select: ").strip()
     return MODEL_INFO.get(choice)
@@ -448,12 +486,15 @@ def select_model():
 def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
     min_bf16_gb = model_info.get("min_bf16_gb", 10)
     min_q5_gb = model_info.get("min_q5_gb", 4)
+    gpu_count = model_info.get("gpu_count", 1)
 
     # MoE detection: use 16-bit LoRA instead of QLoRA for MoE models
     is_moe = model_info.get("is_moe", False)
 
     if is_moe:
         load_mode = "load_in_4bit=False,\n        load_in_16bit=True,"
+    elif gpu_count > 1:
+        load_mode = "load_in_4bit=True,"
     else:
         load_mode = "load_in_4bit=True,"
 
@@ -1137,10 +1178,12 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
     print(f"    Model: {model_info['name']}")
     print(f"    GPU:   {model_info['gpu_label']}")
     print(f"    Cost:  {model_info['cost']}")
+    if model_info.get("gpu_count", 1) > 1:
+        print(f"    Mode:  Multi-GPU ({model_info.get('gpu_count')}x)")
     if model_info.get("is_moe"):
-        print(f"    Mode:  16-bit LoRA (MoE)")
+        print(f"    LoRA:  16-bit LoRA (MoE)")
     else:
-        print(f"    Mode:  QLoRA 4-bit")
+        print(f"    LoRA:  QLoRA 4-bit")
     print()
 
     pod_id = None
@@ -1149,18 +1192,21 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
 
     # [1/6] Create Pod
     print("    [1/6] Creating RunPod instance...")
+    gpu_count = model_info.get("gpu_count", 1)
+    disk_size = 500 if gpu_count > 1 else 250
     try:
         pod = runpod.create_pod(
             name="respark-finetune",
             image_name="runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04",
             gpu_type_id=model_info["gpu"],
+            gpu_count=gpu_count,
             cloud_type="SECURE",
-            volume_in_gb=250,
-            container_disk_in_gb=250,
+            volume_in_gb=disk_size,
+            container_disk_in_gb=disk_size,
             ports="22/tcp",
         )
         pod_id = pod["id"]
-        print(f"    ✅ Pod created: {pod_id}")
+        print(f"    ✅ Pod created: {pod_id} ({gpu_count}x GPU)")
     except Exception as e:
         print(f"    ❌ Failed to create pod: {e}")
         input("\n    Press Enter to go back...")
@@ -1228,7 +1274,10 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
 
     # [4/6] Install & Train
     print("\n    [4/6] Installing dependencies & training...")
-    print("    (This may take 3-5 hours for 31B)\n")
+    if model_info.get("gpu_count", 1) > 1:
+        print(f"    (Multi-GPU: {model_info.get('gpu_count')}x — may take 5-10+ hours for large models)\n")
+    else:
+        print("    (This may take 3-5 hours for 31B)\n")
     try:
         print("    Installing system packages...")
         run_ssh_command(
@@ -1273,8 +1322,23 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
         print("\n    📊 Checking disk space...")
         run_ssh_command(ssh, f"df -h / {WORK_DIR} 2>/dev/null | head -5")
 
-        print("\n    🔥 Training started (nohup mode)! Monitoring log...\n")
-        run_ssh_command(ssh, f"nohup python -u {WORK_DIR}/train.py > {WORK_DIR}/train.log 2>&1 &", timeout=60)
+        gpu_count = model_info.get("gpu_count", 1)
+        if gpu_count > 1:
+            # Multi-GPU: generate accelerate config and launch with accelerate
+            print(f"\n    🔧 Setting up multi-GPU ({gpu_count}x)...")
+            accel_config = f"""compute_environment: LOCAL_MACHINE
+distributed_type: MULTI_GPU
+num_machines: 1
+num_processes: {gpu_count}
+mixed_precision: bf16
+use_cpu: false"""
+            run_ssh_command(ssh, f"mkdir -p ~/.cache/huggingface/accelerate && echo '{accel_config}' > ~/.cache/huggingface/accelerate/default_config.yaml", timeout=30)
+            train_cmd = f"nohup accelerate launch --num_processes={gpu_count} --mixed_precision=bf16 {WORK_DIR}/train.py > {WORK_DIR}/train.log 2>&1 &"
+            print(f"\n    🔥 Training started ({gpu_count}x GPU, nohup mode)! Monitoring log...\n")
+        else:
+            train_cmd = f"nohup python -u {WORK_DIR}/train.py > {WORK_DIR}/train.log 2>&1 &"
+            print("\n    🔥 Training started (nohup mode)! Monitoring log...\n")
+        run_ssh_command(ssh, train_cmd, timeout=60)
         time.sleep(5)
 
         result = poll_training_log(ssh, ssh_host, ssh_port, ssh_key_path)
