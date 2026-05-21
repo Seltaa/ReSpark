@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.5.1 🔥         ║
+    ║        🔥 ReSpark v1.6.0 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -475,8 +475,43 @@ def select_model():
     print("    13. Qwen 72B             [2x A100 80GB ~$3.20/hr] ⚡")
     print("    14. Llama 70B (2xGPU)    [2x A100 80GB ~$3.20/hr] (higher quality)")
     print("    15. Llama 405B           [4x A100 80GB ~$6.40/hr] (experimental) ⚡")
+    print("    ── Custom ──")
+    print("    16. Custom model         [enter your own HuggingFace model ID]")
     print()
     choice = input("    Select: ").strip()
+
+    if choice == "16":
+        print("\n    ⚠️  Custom model: you are responsible for verifying the model source.")
+        print("    ReSpark is not responsible for third-party models.\n")
+        hf_id = input("    HuggingFace model ID (e.g. org/model-name): ").strip()
+        if not hf_id:
+            return None
+        print("\n    Select GPU setup:")
+        print("    1. A5000 24GB  (~$0.50/hr) — models up to ~14B")
+        print("    2. A100 80GB   (~$1.60/hr) — models up to ~70B")
+        print("    3. 2x A100 80GB (~$3.20/hr) — models up to ~120B")
+        print("    4. 4x A100 80GB (~$6.40/hr) — models 120B+")
+        gpu_choice = input("    Select: ").strip()
+        gpu_configs = {
+            "1": {"gpu": "NVIDIA RTX A5000", "gpu_label": "A5000 24GB", "cost": "~$0.50/hr", "vram": 24, "gpu_count": 1},
+            "2": {"gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "A100 80GB", "cost": "~$1.60/hr", "vram": 80, "gpu_count": 1},
+            "3": {"gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "2x A100 80GB", "cost": "~$3.20/hr", "vram": 160, "gpu_count": 2},
+            "4": {"gpu": "NVIDIA A100 80GB PCIe", "gpu_label": "4x A100 80GB", "cost": "~$6.40/hr", "vram": 320, "gpu_count": 4},
+        }
+        gc = gpu_configs.get(gpu_choice)
+        if not gc:
+            return None
+        is_moe = input("    Is this a MoE model? (y/n, default n): ").strip().lower() == "y"
+        model_name = hf_id.split("/")[-1].lower()
+        return {
+            "name": model_name,
+            "hf_id": hf_id,
+            "min_bf16_gb": 10,
+            "min_q5_gb": 4,
+            "is_moe": is_moe,
+            **gc,
+        }
+
     return MODEL_INFO.get(choice)
 
 
@@ -487,6 +522,7 @@ def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
     min_bf16_gb = model_info.get("min_bf16_gb", 10)
     min_q5_gb = model_info.get("min_q5_gb", 4)
     gpu_count = model_info.get("gpu_count", 1)
+    num_epochs = model_info.get("_epochs", 1)
 
     # MoE detection: use 16-bit LoRA instead of QLoRA for MoE models
     is_moe = model_info.get("is_moe", False)
@@ -614,7 +650,7 @@ try:
             per_device_train_batch_size=4,
             gradient_accumulation_steps=4,
             warmup_steps=30,
-            num_train_epochs=1,
+            num_train_epochs={num_epochs},
             learning_rate=2e-4,
             bf16=True,
             logging_steps=1,
@@ -1131,6 +1167,36 @@ def start_finetuning():
         input("\n    ❌ Invalid model. Press Enter to go back...")
         return
 
+    # Epoch selection
+    clear()
+    banner()
+    print("    🔄 Select training epochs:\n")
+    print("    Epochs = how many times the model trains on your data.")
+    print("    More epochs = deeper learning, but risk of overfitting.\n")
+    print("    1. 1 epoch  (recommended for most cases)")
+    print("    2. 2 epochs (for small datasets < 500 pairs)")
+    print("    3. 3 epochs (for very small datasets < 200 pairs)")
+    print("    4. Custom")
+    print()
+    epoch_choice = input("    Select (default 1): ").strip()
+    if epoch_choice == "2":
+        num_epochs = 2
+    elif epoch_choice == "3":
+        num_epochs = 3
+    elif epoch_choice == "4":
+        try:
+            num_epochs = int(input("    Enter number of epochs: ").strip())
+            if num_epochs < 1:
+                num_epochs = 1
+            elif num_epochs > 10:
+                print("    ⚠️ More than 10 epochs is not recommended. Setting to 10.")
+                num_epochs = 10
+        except ValueError:
+            num_epochs = 1
+    else:
+        num_epochs = 1
+    model_info["_epochs"] = num_epochs
+
     clear()
     banner()
     print("    📋 Summary:\n")
@@ -1139,6 +1205,9 @@ def start_finetuning():
     print(f"    Model:  {model_info['name']}")
     print(f"    GPU:    {model_info['gpu_label']}")
     print(f"    Cost:   {model_info['cost']}")
+    print(f"    Epochs: {model_info.get('_epochs', 1)}")
+    if model_info.get("gpu_count", 1) > 1:
+        print(f"    GPUs:   {model_info.get('gpu_count')}x (multi-GPU)")
     if model_info.get("is_moe"):
         print("    LoRA:   16-bit (MoE model detected)")
     else:
