@@ -591,9 +591,17 @@ def check_disk(min_gb, step_name):
     return True
 
 
-print("[STEP] Installing torchvision...")
-subprocess.run(["pip", "install", "torchvision"], capture_output=True, text=True)
-print("[STEP] torchvision installed!")
+print("[STEP] Checking package versions...")
+try:
+    import importlib.metadata as importlib_metadata
+
+    for pkg in ["unsloth", "unsloth_zoo", "transformers", "torch", "trl", "peft", "bitsandbytes"]:
+        try:
+            print(f"[VERSION] {{pkg}}: {{importlib_metadata.version(pkg)}}")
+        except Exception as version_error:
+            print(f"[VERSION] {{pkg}}: unavailable ({{version_error}})")
+except Exception as e:
+    print(f"[WARN] Could not check package versions: {{e}}")
 
 print("[STEP] Loading model...")
 try:
@@ -897,7 +905,7 @@ def wait_for_pod(pod_id):
     return None, None
 
 
-def run_ssh_command(ssh, command, timeout=7200):
+def run_ssh_command(ssh, command, timeout=7200, fail_on_error=False):
     stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
     out = stdout.read().decode(errors="replace")
     err = stderr.read().decode(errors="replace")
@@ -908,6 +916,8 @@ def run_ssh_command(ssh, command, timeout=7200):
             print(f"    {line.strip()}")
     if exit_code != 0:
         print(f"    ⚠️ Command exited with code {exit_code}")
+        if fail_on_error:
+            raise RuntimeError(f"SSH command failed: {command}")
     return combined
 
 
@@ -1353,6 +1363,7 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             ssh,
             "bash -lc 'set -o pipefail; apt-get update && apt-get install -y cmake libcurl4-openssl-dev libssl-dev git build-essential 2>&1 | tail -50'",
             timeout=1800,
+            fail_on_error=True,
         )
         print("    ✅ System packages installed!")
 
@@ -1365,7 +1376,29 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             "pip install torchvision",
         ]
         for cmd in install_commands:
-            run_ssh_command(ssh, f"bash -lc 'set -o pipefail; {cmd} 2>&1 | tail -80'", timeout=1800)
+            run_ssh_command(
+                ssh,
+                f"bash -lc 'set -o pipefail; {cmd} 2>&1 | tail -80'",
+                timeout=1800,
+                fail_on_error=True,
+            )
+
+        print("    Checking installed package versions...")
+        version_check_cmd = """python - <<'PY'
+import importlib.metadata as m
+
+for pkg in ["unsloth", "unsloth_zoo", "transformers", "torch", "trl", "peft", "bitsandbytes"]:
+    try:
+        print(pkg + ': ' + m.version(pkg))
+    except Exception as e:
+        print(pkg + ': unavailable (' + str(e) + ')')
+PY"""
+        run_ssh_command(
+            ssh,
+            f"bash -lc {shlex.quote(version_check_cmd)}",
+            timeout=120,
+            fail_on_error=True,
+        )
         print("    ✅ Python packages installed!")
 
         print("    Installing llama.cpp for GGUF conversion...")
@@ -1373,10 +1406,11 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             ssh,
             f"bash -lc 'cd {WORK_DIR} && if [ ! -d llama.cpp ]; then git clone https://github.com/ggml-org/llama.cpp; fi' 2>&1",
             timeout=1800,
+            fail_on_error=True,
         )
-        run_ssh_command(ssh, "bash -lc 'set -o pipefail; pip install gguf 2>&1 | tail -50'", timeout=600)
-        run_ssh_command(ssh, f"bash -lc 'cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -80'", timeout=1800)
-        run_ssh_command(ssh, f"bash -lc 'cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -80'", timeout=3600)
+        run_ssh_command(ssh, "bash -lc 'set -o pipefail; pip install gguf 2>&1 | tail -50'", timeout=600, fail_on_error=True)
+        run_ssh_command(ssh, f"bash -lc 'cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -80'", timeout=1800, fail_on_error=True)
+        run_ssh_command(ssh, f"bash -lc 'cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -80'", timeout=3600, fail_on_error=True)
         print("    ✅ llama.cpp installed!")
 
         hf_token = config.get("hf_token", "")
