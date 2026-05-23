@@ -844,11 +844,8 @@ if HF_TOKEN and HF_REPO:
     try:
         from huggingface_hub import HfApi
         api = HfApi(token=HF_TOKEN)
-        api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True)
-        try:
-            api.update_repo_settings(repo_id=HF_REPO, repo_type="model", private=False)
-        except Exception:
-            pass
+        # Companion weights are personal — create PRIVATE by default, never force public.
+        api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True, private=True)
         api.upload_file(
             path_or_fileobj=f"{{WORK}}/model-q5_k_m.gguf",
             path_in_repo="model-q5_k_m.gguf",
@@ -1062,14 +1059,9 @@ if not os.path.exists(FILE_PATH):
 
 api = HfApi(token=TOKEN)
 
-print("[HF] Creating repo if needed...")
-api.create_repo(repo_id=REPO_ID, repo_type="model", exist_ok=True)
-
-print("[HF] Setting repo public if possible...")
-try:
-    api.update_repo_settings(repo_id=REPO_ID, repo_type="model", private=False)
-except Exception as e:
-    print(f"[HF] Visibility update skipped: {{e}}")
+print("[HF] Creating private repo if needed...")
+# Companion weights are personal — create PRIVATE by default, never force public.
+api.create_repo(repo_id=REPO_ID, repo_type="model", exist_ok=True, private=True)
 
 print("[HF] Uploading file...")
 api.upload_file(
