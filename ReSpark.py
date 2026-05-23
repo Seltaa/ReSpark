@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.6.0 🔥         ║
+    ║        🔥 ReSpark v1.6.1 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -566,15 +566,37 @@ MIN_BF16_GB = {min_bf16_gb}
 MIN_Q5_GB = {min_q5_gb}
 
 
+def safe_decode(data):
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    return data.decode("utf-8", errors="replace")
+
+
 def run(cmd, step_name=None, timeout=None):
     if step_name:
         print(f"[STEP] {{step_name}}")
     print("[CMD] " + " ".join(str(x) for x in cmd))
-    result = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout)
-    if result.stdout:
-        print(result.stdout[-4000:])
-    if result.stderr:
-        print(result.stderr[-4000:])
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        stdout = safe_decode(e.stdout)
+        stderr = safe_decode(e.stderr)
+        if stdout:
+            print(stdout[-4000:])
+        if stderr:
+            print(stderr[-4000:])
+        print(f"[ERROR] Command timed out after {{timeout}} seconds")
+        sys.exit(1)
+
+    stdout = safe_decode(result.stdout)
+    stderr = safe_decode(result.stderr)
+
+    if stdout:
+        print(stdout[-4000:])
+    if stderr:
+        print(stderr[-4000:])
     if result.returncode != 0:
         print(f"[ERROR] Command failed with exit code {{result.returncode}}")
         sys.exit(1)
@@ -755,8 +777,7 @@ else:
     if not check_disk(30, "bf16 conversion"):
         sys.exit(1)
     try:
-        subprocess.run(["pip", "uninstall", "torchvision", "-y"], capture_output=True, text=True)
-        subprocess.run(["pip", "install", "--upgrade", "transformers"], capture_output=True, text=True)
+        subprocess.run(["pip", "uninstall", "torchvision", "-y"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         print("[STEP] Installing llama.cpp conversion requirements...")
         req = f"{{WORK}}/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"
@@ -1372,7 +1393,6 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             "pip install --upgrade pip",
             "pip install --upgrade --force-reinstall --no-cache-dir unsloth unsloth_zoo",
             "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
-            "pip install --upgrade transformers",
             "pip install torchvision",
         ]
         for cmd in install_commands:
