@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.6.2 🔥         ║
+    ║        🔥 ReSpark v1.6.3 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -1440,6 +1440,14 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
             "pip install torchvision",
         ]
+
+        # Gemma 4 12B is newer than the current pip transformers build in some images.
+        # If transformers says the model is not supported yet, using the latest GitHub
+        # transformers build is the intended compatibility fix.
+        if "gemma-4-12b" in model_info.get("hf_id", "").lower():
+            install_commands.append(
+                "pip install --upgrade --force-reinstall --no-cache-dir git+https://github.com/huggingface/transformers.git"
+            )
         for cmd in install_commands:
             run_ssh_command(
                 ssh,
