@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.6.1 🔥         ║
+    ║        🔥 ReSpark v1.6.2 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -624,6 +624,44 @@ def check_disk(min_gb, step_name):
     return True
 
 
+def ensure_llama_cpp():
+    print("[STEP] Preparing llama.cpp for GGUF conversion...")
+    llama_dir = f"{{WORK}}/llama.cpp"
+    if not os.path.isdir(llama_dir):
+        run(["git", "clone", "--depth", "1", "https://github.com/ggml-org/llama.cpp", llama_dir], "Cloning llama.cpp", timeout=1800)
+    run(["pip", "install", "gguf"], "Installing gguf", timeout=600)
+    req = f"{{llama_dir}}/requirements/requirements-convert_hf_to_gguf.txt"
+    if os.path.exists(req):
+        run(["pip", "install", "-r", req], "Installing llama.cpp convert requirements", timeout=1800)
+    run(["cmake", "-S", llama_dir, "-B", f"{{llama_dir}}/build"], "Configuring llama.cpp", timeout=1800)
+    build_targets = ["llama-quantize", "quantize"]
+    built = False
+    last_error = None
+    for target in build_targets:
+        try:
+            run(["cmake", "--build", f"{{llama_dir}}/build", "--target", target, "-j", str(os.cpu_count() or 4)], f"Building llama.cpp target {{target}}", timeout=3600)
+            built = True
+            break
+        except SystemExit as e:
+            last_error = e
+            print(f"[WARN] Build target {{target}} failed, trying next target if available...")
+    if not built:
+        raise last_error or RuntimeError("Could not build llama.cpp quantize tool")
+
+    candidates = [
+        f"{{llama_dir}}/build/bin/llama-quantize",
+        f"{{llama_dir}}/build/bin/quantize",
+        f"{{llama_dir}}/build/llama-quantize",
+        f"{{llama_dir}}/build/quantize",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            print(f"[STEP] llama.cpp quantizer ready: {{path}}")
+            return path
+    print("[ERROR] llama.cpp quantize binary not found after build")
+    sys.exit(1)
+
+
 print("[STEP] Checking package versions...")
 try:
     import importlib.metadata as importlib_metadata
@@ -790,11 +828,7 @@ else:
     try:
         subprocess.run(["pip", "uninstall", "torchvision", "-y"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        print("[STEP] Installing llama.cpp conversion requirements...")
-        req = f"{{WORK}}/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"
-        if os.path.exists(req):
-            run(["pip", "install", "-r", req], "Installing llama.cpp convert requirements")
-
+        quantize_bin = ensure_llama_cpp()
         convert_script = f"{{WORK}}/llama.cpp/convert_hf_to_gguf.py"
         if not os.path.exists(convert_script):
             print("[ERROR] llama.cpp convert script not found!")
@@ -833,9 +867,9 @@ else:
     if not check_disk(15, "q5_k_m quantization"):
         sys.exit(1)
     try:
-        quantize_bin = f"{{WORK}}/llama.cpp/build/bin/llama-quantize"
+        # quantize_bin was prepared by ensure_llama_cpp() during bf16 conversion.
         if not os.path.exists(quantize_bin):
-            print("[ERROR] llama-quantize not found!")
+            print(f"[ERROR] llama.cpp quantizer not found at {{quantize_bin}}")
             sys.exit(1)
 
         run([
@@ -1432,17 +1466,7 @@ PY"""
         )
         print("    ✅ Python packages installed!")
 
-        print("    Installing llama.cpp for GGUF conversion...")
-        run_ssh_command(
-            ssh,
-            f"bash -lc 'cd {WORK_DIR} && if [ ! -d llama.cpp ]; then git clone https://github.com/ggml-org/llama.cpp; fi' 2>&1",
-            timeout=1800,
-            fail_on_error=True,
-        )
-        run_ssh_command(ssh, "bash -lc 'set -o pipefail; pip install gguf 2>&1 | tail -50'", timeout=600, fail_on_error=True)
-        run_ssh_command(ssh, f"bash -lc 'cd {WORK_DIR}/llama.cpp && cmake -B build 2>&1 | tail -80'", timeout=1800, fail_on_error=True)
-        run_ssh_command(ssh, f"bash -lc 'cd {WORK_DIR}/llama.cpp && cmake --build build --target llama-quantize -j$(nproc) 2>&1 | tail -80'", timeout=3600, fail_on_error=True)
-        print("    ✅ llama.cpp installed!")
+        print("    Skipping llama.cpp pre-install. It will be prepared after training, only when GGUF conversion starts.")
 
         hf_token = config.get("hf_token", "")
         if hf_token:
