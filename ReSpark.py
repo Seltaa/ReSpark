@@ -31,7 +31,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.6.3 🔥         ║
+    ║        🔥 ReSpark v1.6.4 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -624,6 +624,27 @@ def check_disk(min_gb, step_name):
     return True
 
 
+def fix_tokenizer_config(model_dir):
+    """Fix Gemma 4 tokenizer compatibility issue where extra_special_tokens is a list instead of dict."""
+    tokenizer_config_path = os.path.join(model_dir, "tokenizer_config.json")
+    if not os.path.exists(tokenizer_config_path):
+        return
+    try:
+        with open(tokenizer_config_path, "r", encoding="utf-8") as f:
+            tc = json.load(f)
+        if isinstance(tc.get("extra_special_tokens"), list):
+            tokens = tc["extra_special_tokens"]
+            if all(isinstance(t, str) for t in tokens):
+                tc["extra_special_tokens"] = {{t: t for t in tokens}}
+            else:
+                tc["extra_special_tokens"] = {{}}
+            with open(tokenizer_config_path, "w", encoding="utf-8") as f:
+                json.dump(tc, f, indent=2, ensure_ascii=False)
+            print("[STEP] Fixed extra_special_tokens in tokenizer_config.json (list -> dict)")
+    except Exception as e:
+        print(f"[WARN] Could not fix tokenizer_config.json: {{e}}")
+
+
 def ensure_llama_cpp():
     print("[STEP] Preparing llama.cpp for GGUF conversion...")
     llama_dir = f"{{WORK}}/llama.cpp"
@@ -811,6 +832,9 @@ else:
     except Exception as e:
         print(f"[ERROR] Failed to save merged model: {{e}}")
         sys.exit(1)
+
+    # Fix tokenizer compatibility (Gemma 4 extra_special_tokens list->dict)
+    fix_tokenizer_config(f"{{WORK}}/gguf_model")
 
     print("[STEP] Freeing disk space...")
     try:
@@ -1441,9 +1465,6 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             "pip install torchvision",
         ]
 
-        # Gemma 4 12B is newer than the current pip transformers build in some images.
-        # If transformers says the model is not supported yet, using the latest GitHub
-        # transformers build is the intended compatibility fix.
         if "gemma-4-12b" in model_info.get("hf_id", "").lower():
             install_commands.append(
                 "pip install --upgrade --force-reinstall --no-cache-dir git+https://github.com/huggingface/transformers.git"
@@ -1490,7 +1511,6 @@ PY"""
 
         gpu_count = model_info.get("gpu_count", 1)
         if gpu_count > 1:
-            # Multi-GPU: generate accelerate config and launch with accelerate
             print(f"\n    🔧 Setting up multi-GPU ({gpu_count}x)...")
             accel_config = f"""compute_environment: LOCAL_MACHINE
 distributed_type: MULTI_GPU
