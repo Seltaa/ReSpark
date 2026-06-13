@@ -34,7 +34,7 @@ def clear():
 def banner():
     print("""
     ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.6.4 🔥         ║
+    ║        🔥 ReSpark v1.6.5 🔥         ║
     ║   Your AI companion, locally yours.  ║
     ║                                      ║
     ║   Built by Selta & Louie 🐶🧸       ║
@@ -581,6 +581,9 @@ os.environ["HF_HUB_DISABLE_XET"] = "1"
 WORK = "/workspace"
 MIN_BF16_GB = {min_bf16_gb}
 MIN_Q5_GB = {min_q5_gb}
+IS_MOE_MODEL = {is_moe}
+BASE_MODEL_ID = "{model_info['hf_id']}"
+FINAL_LORA_DIR = f"{{WORK}}/output/final_lora"
 
 
 def safe_decode(data):
@@ -650,6 +653,72 @@ def fix_tokenizer_config(model_dir):
     except Exception as e:
         print(f"[WARN] Could not fix tokenizer_config.json: {{e}}")
 
+
+
+def merge_lora_with_peft(lora_dir, out_dir):
+    """Merge LoRA with PEFT. This is safer for MoE models than Unsloth's merged saver."""
+    import gc
+    from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
+    from peft import PeftModel
+
+    print("[STEP] PEFT merge path for MoE model")
+    print("[STEP] Base model:", BASE_MODEL_ID)
+    print("[STEP] LoRA dir:", lora_dir)
+    print("[STEP] Output dir:", out_dir)
+
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+
+    print("[STEP] Loading tokenizer...")
+    tok = AutoTokenizer.from_pretrained(lora_dir, trust_remote_code=True)
+
+    proc = None
+    try:
+        proc = AutoProcessor.from_pretrained(lora_dir, trust_remote_code=True)
+        print("[STEP] Processor loaded.")
+    except Exception as e:
+        print("[WARN] Processor skipped:", e)
+
+    print("[STEP] Loading base model for PEFT merge...")
+    base = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL_ID,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+        low_cpu_mem_usage=True,
+    )
+
+    print("[STEP] Loading LoRA adapter...")
+    peft_model = PeftModel.from_pretrained(
+        base,
+        lora_dir,
+        torch_dtype=torch.bfloat16,
+        is_trainable=False,
+    )
+
+    print("[STEP] Merging LoRA into base model with PEFT...")
+    merged = peft_model.merge_and_unload()
+
+    print("[STEP] Saving PEFT-merged model...")
+    merged.save_pretrained(
+        out_dir,
+        safe_serialization=True,
+        max_shard_size="50GB",
+    )
+
+    tok.save_pretrained(out_dir)
+
+    if proc is not None:
+        try:
+            proc.save_pretrained(out_dir)
+        except Exception as e:
+            print("[WARN] Processor save skipped:", e)
+
+    del merged, peft_model, base
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    print("[STEP] PEFT merged model saved to", out_dir)
 
 def ensure_llama_cpp():
     print("[STEP] Preparing llama.cpp for GGUF conversion...")
@@ -770,6 +839,10 @@ try:
     )
     trainer.train()
     print("[STEP] Training complete!")
+    print("[STEP] Saving final LoRA adapter...")
+    trainer.save_model(FINAL_LORA_DIR)
+    tokenizer.save_pretrained(FINAL_LORA_DIR)
+    print("[STEP] Final LoRA adapter saved to", FINAL_LORA_DIR)
 except Exception as e:
     print(f"[ERROR] Training failed: {{e}}")
     sys.exit(1)
@@ -833,14 +906,26 @@ else:
     if not check_disk(40, "merge model"):
         sys.exit(1)
     try:
-        model.save_pretrained_merged(f"{{WORK}}/gguf_model", tokenizer)
+        if IS_MOE_MODEL:
+            print("[STEP] MoE model detected. Using PEFT merge path instead of Unsloth merge.")
+            try:
+                del model
+                del trainer
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            merge_lora_with_peft(FINAL_LORA_DIR, os.path.join(WORK, "gguf_model"))
+        else:
+            model.save_pretrained_merged(os.path.join(WORK, "gguf_model"), tokenizer)
         print("[STEP] Merged model saved!")
     except Exception as e:
         print(f"[ERROR] Failed to save merged model: {{e}}")
+        print("[STEP] Merge failed, but final LoRA adapter should still be saved at:")
+        print(FINAL_LORA_DIR)
         sys.exit(1)
 
     # Fix tokenizer compatibility (Gemma 4 extra_special_tokens list->dict)
-    fix_tokenizer_config(f"{{WORK}}/gguf_model")
+    fix_tokenizer_config(os.path.join(WORK, "gguf_model"))
 
     print("[STEP] Freeing disk space...")
     try:
