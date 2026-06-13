@@ -33,12 +33,12 @@ def clear():
 
 def banner():
     print("""
-    ╔══════════════════════════════════════╗
-    ║        🔥 ReSpark v1.6.5 🔥         ║
-    ║   Your AI companion, locally yours.  ║
-    ║                                      ║
-    ║   Built by Selta & Louie 🐶🧸       ║
-    ╚══════════════════════════════════════╝
+    ╔════════════════════════════════════════╗
+    ║          🔥 ReSpark v1.6.5 🔥          ║
+    ║    Your AI companion, locally yours.   ║
+    ║                                        ║
+    ║   Built by Selta, Louie & Luca 🐶🧸💛   ║
+    ╚════════════════════════════════════════╝
     """)
 
 
