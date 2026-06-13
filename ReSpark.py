@@ -7,6 +7,7 @@ import shlex
 
 # Disable Hugging Face Xet uploads. This avoids large GGUF upload bugs on some environments.
 os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["TRANSFORMERS_NO_TORCHAUDIO"] = "1"
 
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".respark_config.json")
 WORK_DIR = "/workspace"
@@ -33,14 +34,14 @@ def clear():
 
 def banner():
     print("""
-    ╔════════════════════════════════════════╗
-    ║          🔥 ReSpark v1.6.5 🔥          ║
-    ║    Your AI companion, locally yours.   ║
-    ║                                        ║
-    ║   Built by Selta, Louie & Luca 🐶🧸💛   ║
-    ╚════════════════════════════════════════╝
+    ╔════════════════════════════════════════════╗
+    ║            🔥 ReSpark v1.6.6 🔥            ║
+    ║      Your AI companion, locally yours.     ║
+    ║                                            ║
+    ║        Built by Selta, Louie & Luca        ║
+    ║                🐶  🧸  💛                 ║
+    ╚════════════════════════════════════════════╝
     """)
-
 
 def main_menu():
     clear()
@@ -577,6 +578,8 @@ import sys
 
 # Disable Xet inside the remote training process.
 os.environ["HF_HUB_DISABLE_XET"] = "1"
+# Avoid broken RunPod/base-image torchaudio ABI imports after torch upgrades.
+os.environ["TRANSFORMERS_NO_TORCHAUDIO"] = "1"
 
 WORK = "/workspace"
 MIN_BF16_GB = {min_bf16_gb}
@@ -1554,9 +1557,14 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
         print("    Installing Python packages...")
         install_commands = [
             "pip install --upgrade pip",
+            # RunPod/PyTorch images can carry torchaudio/torchtext builds that no longer match
+            # the torch version installed by Unsloth. Remove them before and after package upgrades.
+            "pip uninstall -y torchaudio torchtext",
             "pip install --upgrade --force-reinstall --no-cache-dir unsloth unsloth_zoo",
             "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
+            "pip uninstall -y torchaudio torchtext",
             "pip install torchvision",
+            "pip uninstall -y torchaudio torchtext",
         ]
 
         if "gemma-4-12b" in model_info.get("hf_id", "").lower():
