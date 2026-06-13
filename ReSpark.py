@@ -5,6 +5,9 @@ import time
 import re
 import shlex
 
+# Disable Hugging Face Xet uploads. This avoids large GGUF upload bugs on some environments.
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".respark_config.json")
 WORK_DIR = "/workspace"
 
@@ -572,6 +575,9 @@ import os
 import subprocess
 import sys
 
+# Disable Xet inside the remote training process.
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+
 WORK = "/workspace"
 MIN_BF16_GB = {min_bf16_gb}
 MIN_Q5_GB = {min_q5_gb}
@@ -930,13 +936,13 @@ HF_TOKEN = "{hf_token}"
 HF_REPO = "{hf_repo}"
 
 if HF_TOKEN and HF_REPO:
-    print("[STEP] Uploading to HuggingFace...")
+    print("[STEP] Uploading to HuggingFace with Xet disabled and private repo setting...")
     try:
         from huggingface_hub import HfApi
         api = HfApi(token=HF_TOKEN)
-        api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True)
+        api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True, private=True)
         try:
-            api.update_repo_settings(repo_id=HF_REPO, repo_type="model", private=False)
+            api.update_repo_settings(repo_id=HF_REPO, repo_type="model", private=True)
         except Exception:
             pass
         api.upload_file(
@@ -1135,6 +1141,9 @@ import os
 import sys
 from huggingface_hub import HfApi
 
+# Disable Xet for large file upload reliability.
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+
 TOKEN = os.environ.get("HF_TOKEN")
 REPO_ID = os.environ.get("HF_REPO")
 FILE_PATH = "{WORK_DIR}/model-q5_k_m.gguf"
@@ -1153,11 +1162,11 @@ if not os.path.exists(FILE_PATH):
 api = HfApi(token=TOKEN)
 
 print("[HF] Creating repo if needed...")
-api.create_repo(repo_id=REPO_ID, repo_type="model", exist_ok=True)
+api.create_repo(repo_id=REPO_ID, repo_type="model", exist_ok=True, private=True)
 
-print("[HF] Setting repo public if possible...")
+print("[HF] Keeping repo private if possible...")
 try:
-    api.update_repo_settings(repo_id=REPO_ID, repo_type="model", private=False)
+    api.update_repo_settings(repo_id=REPO_ID, repo_type="model", private=True)
 except Exception as e:
     print(f"[HF] Visibility update skipped: {{e}}")
 
