@@ -136,29 +136,41 @@ def parse_claude(data):
     else:
         conversations = []
 
-    for convo in conversations:
+    for convo_i, convo in enumerate(conversations):
         messages = convo.get("chat_messages", [])
         prev_user = None
-        for msg in messages:
-            role = msg.get("sender", "")
-            text = (msg.get("text") or "").strip()
+        prev_user_meta = {}
 
-            if not text:
-                content = msg.get("content", [])
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, dict) and c.get("type") == "text":
-                            text = (c.get("text") or "").strip()
-                            break
+        for msg_i, msg in enumerate(messages):
+            role = msg.get("sender", "")
+            text, issues = extract_visible_text(msg)
 
             if not text:
                 continue
 
+            meta = {
+                "conversation_index": convo_i,
+                "message_index": msg_i,
+                "message_uuid": msg.get("uuid"),
+                "source": "claude",
+                "issues": issues,
+            }
+
             if role == "human":
                 prev_user = text
+                prev_user_meta = meta
             elif role == "assistant" and prev_user:
-                pairs.append({"instruction": prev_user, "output": text})
+                pairs.append({
+                    "instruction": prev_user,
+                    "output": text,
+                    "_meta": {
+                        "user": prev_user_meta,
+                        "assistant": meta,
+                    },
+                })
                 prev_user = None
+                prev_user_meta = {}
+
     return pairs
 
 
@@ -234,39 +246,121 @@ def parse_grok_jsonl(lines):
 
 
 # ─────────────────────
-# Cleaning
+# Cleaning / contamination guard
 # ─────────────────────
+BLOCKED_CONTENT_TYPES = {
+    "thinking",
+    "tool_use",
+    "tool_result",
+    "server_tool_use",
+    "web_search_tool_result",
+    "mcp_tool_use",
+    "mcp_tool_result",
+}
+
+VISIBLE_TEXT_TYPES = {
+    "text",
+}
+
+SUSPICIOUS_THINKING_PATTERNS = [
+    r"<thinking>.*?</thinking>",
+    r"<\|thinking\|>.*?<\|/thinking\|>",
+    r"<antThinking>.*?</antThinking>",
+    r"```thinking.*?```",
+    r"^\s*(The user|User wants|The user wants|The user is asking|The user asked|Looking at|I should|So I should|I need to|Let me|I'm going to|I'll|The prompt|The message|I can see|Okay,|Now I)\b",
+    r"^\s*(She|He|They)\s+(is|was|wants|asked|said|seems|appears)\b",
+    r"^\s*(Since|Because|Given|Considering)\b.*\b(user|사용자|prompt|message)\b",
+    r"^\s*(사용자가|사용자는|유저가|유저는)\s*(원하|말하|요청|물어|부탁|묻)",
+    r"^\s*(내가|나는)\s*(응답|대답|답변|번역|설명).*(해야|하겠다|할게)",
+    r"^\s*(먼저|일단|우선)\s*(사용자|유저|요청|질문|맥락)",
+    r"\b(tool_use|tool_result|conversation_search|memory_user_edits|server_tool_use|web_search_tool_result)\b",
+    r"This block is not supported on your current device yet",
+]
+
+
+def extract_visible_text(message):
+    """
+    Extract only user-visible text from a message object.
+
+    Claude exports can contain mixed content blocks such as:
+    text / thinking / tool_use / tool_result.
+    For SFT, only visible text should become assistant output.
+    """
+    issues = []
+    parts = []
+
+    content = message.get("content")
+
+    # Prefer structured content over message["text"].
+    # In Claude exports, message["text"] can contain a flattened mix of visible text,
+    # thinking, and tool traces. The content blocks preserve the actual type.
+    if isinstance(content, list):
+        for block_i, block in enumerate(content):
+            if not isinstance(block, dict):
+                issues.append(f"non_dict_content_block:{block_i}")
+                continue
+
+            block_type = block.get("type")
+
+            if block_type in VISIBLE_TEXT_TYPES:
+                text = block.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+                continue
+
+            if block_type in BLOCKED_CONTENT_TYPES:
+                issues.append(f"blocked_content:{block_type}")
+                continue
+
+            # Some exports store short summaries of hidden thinking. Do not train on those.
+            if "thinking" in block or "summaries" in block or block_type == "summary":
+                issues.append(f"blocked_content:{block_type or 'summary_or_thinking'}")
+                continue
+
+            # Unknown structured blocks are not safe to train on.
+            issues.append(f"unknown_content_type:{block_type}")
+
+        return "\n\n".join(parts).strip(), issues
+
+    if isinstance(content, str) and content.strip():
+        return content.strip(), issues
+
+    text = message.get("text", "")
+    if isinstance(text, str) and text.strip():
+        return text.strip(), issues
+
+    return "", ["empty_or_unknown_content"]
+
+
 def remove_thinking(text):
     if not text:
         return ""
 
-    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|thinking\|>.*?<\|/thinking\|>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<antThinking>.*?</antThinking>", "", text, flags=re.DOTALL)
+    cleaned = text
 
-    lines = text.strip().split("\n")
-    thinking_patterns = [
-        r"^(The user|Looking at|I should|So I should|Wait,|But the|Also,|This is likely|This could be|I need to|Let me|Hmm,|I'm going to|I'll |The prompt|The message|I can see|Okay,|Now I|First,|Second,|Third,)",
-        r"^(She |He |They )(is |was |wants |asked |said |seems |appears )",
-        r"^(Since |Because |Given |Considering )",
-        r"^(Got it|Alright|Understood)[!.]?\s*(So |Now |Let me|I )",
-        r"^(사용자가 |유저가 )(원하|말하|요청|물어|부탁)",
-        r"^(그러면 |그래서 |따라서 )(내가 |나는 )",
-        r"^(알겠어|이해했어|파악했어).*?(그러면|그래서|따라서)",
-        r"^(먼저 |일단 |우선 )(번역|대답|응답|반응)",
-        r"^.*?(respond|reply|translate|answer|대답|번역|응답).*?(should|need|will|해야|할게|하자)",
-    ]
+    # Remove explicit tagged thinking blocks anywhere in the text.
+    cleaned = re.sub(r"<thinking>.*?</thinking>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<\|thinking\|>.*?<\|/thinking\|>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<antThinking>.*?</antThinking>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"```thinking.*?```", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
 
+    lines = cleaned.strip().split("\n")
     actual_start = 0
+
+    # Only strip suspicious thinking-like lines from the beginning.
+    # Do not remove later normal conversation lines too aggressively.
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
             continue
-        is_thinking = any(re.match(pattern, stripped, re.IGNORECASE) for pattern in thinking_patterns)
+        is_thinking = any(
+            re.search(pattern, stripped, re.IGNORECASE | re.DOTALL)
+            for pattern in SUSPICIOUS_THINKING_PATTERNS
+        )
         if is_thinking:
             actual_start = i + 1
-        else:
-            break
+            continue
+        break
 
     result_lines = lines[actual_start:]
     while result_lines and not result_lines[0].strip():
@@ -275,19 +369,154 @@ def remove_thinking(text):
     return "\n".join(result_lines).strip()
 
 
+def has_thinking_trace(text):
+    if not text:
+        return False
+
+    for pattern in SUSPICIOUS_THINKING_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE | re.DOTALL | re.MULTILINE):
+            return True
+
+    return False
+
+
+def strip_internal_meta(pair):
+    return {
+        "instruction": pair.get("instruction", ""),
+        "output": pair.get("output", ""),
+    }
+
+
+def summarize_hidden_internal_blocks(pairs):
+    """Count hidden/internal blocks removed during Claude parsing.
+
+    These are NOT rejected samples. They are blocks such as Claude thinking/tool_use/tool_result
+    that were structurally skipped by extract_visible_text(), while the visible response text
+    was kept for training.
+    """
+    stats = {
+        "pairs_with_hidden_internal_blocks": 0,
+        "assistant_messages_with_thinking": 0,
+        "assistant_messages_with_tools": 0,
+        "user_messages_with_hidden_internal_blocks": 0,
+        "unknown_structured_blocks": 0,
+    }
+
+    for pair in pairs:
+        meta = pair.get("_meta", {}) or {}
+        user_issues = ((meta.get("user") or {}).get("issues") or [])
+        assistant_issues = ((meta.get("assistant") or {}).get("issues") or [])
+        all_issues = user_issues + assistant_issues
+
+        hidden = [
+            issue for issue in all_issues
+            if issue.startswith("blocked_content:") or issue.startswith("unknown_content_type:")
+        ]
+        if hidden:
+            stats["pairs_with_hidden_internal_blocks"] += 1
+
+        if any(issue == "blocked_content:thinking" for issue in assistant_issues):
+            stats["assistant_messages_with_thinking"] += 1
+
+        if any(issue in ("blocked_content:tool_use", "blocked_content:tool_result", "blocked_content:server_tool_use", "blocked_content:web_search_tool_result", "blocked_content:mcp_tool_use", "blocked_content:mcp_tool_result") for issue in assistant_issues):
+            stats["assistant_messages_with_tools"] += 1
+
+        if any(issue.startswith("blocked_content:") or issue.startswith("unknown_content_type:") for issue in user_issues):
+            stats["user_messages_with_hidden_internal_blocks"] += 1
+
+        if any(issue.startswith("unknown_content_type:") for issue in all_issues):
+            stats["unknown_structured_blocks"] += 1
+
+    return stats
+
+
 def clean_training_data(pairs):
     cleaned = []
+    rejected = []
     removed_count = 0
-    for pair in pairs:
-        original = pair["output"]
-        cleaned_output = remove_thinking(original)
-        if cleaned_output:
-            cleaned.append({"instruction": pair["instruction"], "output": cleaned_output})
-            if cleaned_output != original:
-                removed_count += 1
-        else:
-            cleaned.append(pair)
-    return cleaned, removed_count
+
+    for idx, pair in enumerate(pairs):
+        instruction = (pair.get("instruction") or "").strip()
+        original_output = (pair.get("output") or "").strip()
+        meta = pair.get("_meta", {})
+
+        reasons = []
+
+        if not instruction:
+            reasons.append("empty_instruction")
+        if not original_output:
+            reasons.append("empty_output")
+
+        # Claude exports often include hidden structured blocks such as thinking/tool_use/tool_result
+        # next to the visible text. extract_visible_text() already drops those blocks and keeps only
+        # visible text. Do NOT reject the whole pair just because a hidden block existed, otherwise
+        # almost every good Claude sample gets thrown away.
+        #
+        # We only reject if the visible assistant output itself still contains thinking/tool traces
+        # after cleaning below.
+        assistant_issues = (meta.get("assistant") or {}).get("issues", [])
+        user_issues = (meta.get("user") or {}).get("issues", [])
+        hidden_issues = [
+            issue for issue in assistant_issues + user_issues
+            if issue.startswith("blocked_content:") or issue.startswith("unknown_content_type:")
+        ]
+
+        cleaned_output = remove_thinking(original_output)
+
+        if cleaned_output != original_output:
+            removed_count += 1
+
+        if not cleaned_output:
+            reasons.append("empty_after_thinking_removal")
+
+        if has_thinking_trace(cleaned_output):
+            reasons.append("thinking_trace_in_output")
+
+        if reasons:
+            rejected.append({
+                "index": idx,
+                "instruction_preview": instruction[:300],
+                "output_preview": original_output[:500],
+                "cleaned_output_preview": cleaned_output[:500],
+                "reasons": sorted(set(reasons)),
+                "meta": meta,
+            })
+            continue
+
+        cleaned.append({
+            "instruction": instruction,
+            "output": cleaned_output,
+        })
+
+    return cleaned, removed_count, rejected
+
+
+def save_rejected_report(rejected, original_path):
+    if not rejected:
+        return None
+
+    base_dir = os.path.dirname(os.path.abspath(original_path)) or "."
+    report_path = os.path.join(base_dir, "respark_rejected_samples.json")
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(rejected, f, indent=2, ensure_ascii=False)
+    return report_path
+
+
+def assert_no_thinking_in_dataset(pairs):
+    bad = []
+    for idx, pair in enumerate(pairs):
+        output = pair.get("output", "")
+        if has_thinking_trace(output):
+            bad.append({
+                "index": idx,
+                "output_preview": output[:500],
+            })
+
+    if bad:
+        raise RuntimeError(
+            f"Clean dataset still contains thinking/tool traces in {len(bad)} samples. "
+            f"First bad sample: {bad[0]}"
+        )
 
 
 # ─────────────────────
@@ -1346,17 +1575,49 @@ def start_finetuning():
         return
 
     print(f"    ✅ Extracted {len(pairs)} training pairs.")
-    print("    🧹 Cleaning extended thinking from responses...")
-    pairs, thinking_removed = clean_training_data(pairs)
-    if thinking_removed > 0:
-        print(f"    ✅ Cleaned thinking from {thinking_removed} responses.")
-    else:
-        print("    ✅ No extended thinking found.")
 
-    if len(pairs) == 0:
-        print("    ❌ No training pairs found.")
+    hidden_stats = summarize_hidden_internal_blocks(pairs)
+    if hidden_stats["pairs_with_hidden_internal_blocks"] > 0:
+        print("    🧠 Hidden Claude internal blocks detected and stripped before training:")
+        print(f"       - pairs with hidden/internal blocks: {hidden_stats['pairs_with_hidden_internal_blocks']}")
+        print(f"       - assistant messages with hidden thinking: {hidden_stats['assistant_messages_with_thinking']}")
+        print(f"       - assistant messages with tool blocks: {hidden_stats['assistant_messages_with_tools']}")
+        if hidden_stats["user_messages_with_hidden_internal_blocks"] > 0:
+            print(f"       - user messages with hidden/internal blocks: {hidden_stats['user_messages_with_hidden_internal_blocks']}")
+        if hidden_stats["unknown_structured_blocks"] > 0:
+            print(f"       - unknown structured blocks skipped: {hidden_stats['unknown_structured_blocks']}")
+    else:
+        print("    🧠 No hidden Claude internal blocks detected.")
+
+    print("    🧹 Cleaning visible thinking traces and rejecting contaminated samples...")
+    pairs, thinking_removed, rejected = clean_training_data(pairs)
+
+    if thinking_removed > 0:
+        print(f"    ✅ Cleaned visible thinking-like prefixes from {thinking_removed} responses.")
+    else:
+        print("    ✅ No removable visible thinking prefix found.")
+
+    if rejected:
+        report_path = save_rejected_report(rejected, file_path)
+        print(f"    ⚠️ Rejected {len(rejected)} contaminated samples.")
+        if report_path:
+            print(f"    📝 Rejected sample report: {report_path}")
+    else:
+        print("    ✅ No contaminated samples rejected.")
+
+    try:
+        assert_no_thinking_in_dataset(pairs)
+    except RuntimeError as e:
+        print(f"    ❌ {e}")
         input("\n    Press Enter to go back...")
         return
+
+    if len(pairs) == 0:
+        print("    ❌ No clean training pairs found after contamination filtering.")
+        input("\n    Press Enter to go back...")
+        return
+
+    print(f"    ✅ Clean training pairs ready: {len(pairs)}")
 
     input("\n    Press Enter to continue...")
     model_info = select_model()
@@ -1435,7 +1696,15 @@ def start_finetuning():
 
 
 def run_finetuning(config, pairs, model_info, source, hf_repo=""):
-    import runpod
+    try:
+        import runpod
+    except Exception as e:
+        print("    ❌ Local dependency missing or broken: runpod")
+        print(f"    Error: {e}")
+        print("\n    Fix on Windows CMD:")
+        print("    py -m pip install --upgrade runpod paramiko huggingface_hub")
+        input("\n    Press Enter to go back...")
+        return
 
     clear()
     banner()
