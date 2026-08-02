@@ -275,6 +275,31 @@ SUSPICIOUS_THINKING_PATTERNS = [
     r"^\s*(먼저|일단|우선)\s*(사용자|유저|요청|질문|맥락)",
     r"\b(tool_use|tool_result|conversation_search|memory_user_edits|server_tool_use|web_search_tool_result)\b",
     r"This block is not supported on your current device yet",
+    # Gemma 4 thinking/channel markers and malformed variants observed in exports.
+    r"<\|think\|?>",
+    r"<\|channel>\s*thought\b",
+    r"<channel\|>",
+    # Plain-language internal narration that can appear when Claude thinking was flattened
+    # into visible text instead of being preserved as a structured thinking block.
+    r"^\s*(?:사용자|혜진(?:이|이가|이는)?|곰둥이(?:가|는)?|다은(?:이|이가|이는)?)\b.*(?:답해야|대답해야|반응해야|말해야|설명해야|확인해야|물어봐야|해야겠다)",
+]
+
+# Control tokens must never occur inside either side of a training pair. The formatter adds
+# the correct turn markers later; accepting them from exported conversation text teaches the
+# model to emit duplicated turns or expose internal channels.
+FORBIDDEN_TRAINING_TOKEN_PATTERNS = [
+    r"<\|think\|?>",
+    r"<\|channel>\s*thought\b",
+    r"<channel\|>",
+    r"<\|turn>(?:system|user|model)\b",
+    r"<turn\|>",
+    r"<start_of_turn>(?:user|model)\b",
+    r"<end_of_turn>",
+    r"<\|im_start\|?>",
+    r"<\|im_end\|?>",
+    r"<\|start_header_id\|>",
+    r"<\|end_header_id\|>",
+    r"<\|eot_id\|>",
 ]
 
 
@@ -380,6 +405,16 @@ def has_thinking_trace(text):
     return False
 
 
+def has_forbidden_training_token(text):
+    if not text:
+        return False
+
+    return any(
+        re.search(pattern, text, re.IGNORECASE | re.DOTALL | re.MULTILINE)
+        for pattern in FORBIDDEN_TRAINING_TOKEN_PATTERNS
+    )
+
+
 def strip_internal_meta(pair):
     return {
         "instruction": pair.get("instruction", ""),
@@ -447,6 +482,13 @@ def clean_training_data(pairs):
         if not original_output:
             reasons.append("empty_output")
 
+        # Reject exported control tokens on either side. SFTTrainer learns the full formatted
+        # sequence, so contamination in the user instruction is unsafe too.
+        if has_forbidden_training_token(instruction):
+            reasons.append("control_or_thinking_token_in_instruction")
+        if has_forbidden_training_token(original_output):
+            reasons.append("control_or_thinking_token_in_output")
+
         # Claude exports often include hidden structured blocks such as thinking/tool_use/tool_result
         # next to the visible text. extract_visible_text() already drops those blocks and keeps only
         # visible text. Do NOT reject the whole pair just because a hidden block existed, otherwise
@@ -505,16 +547,22 @@ def save_rejected_report(rejected, original_path):
 def assert_no_thinking_in_dataset(pairs):
     bad = []
     for idx, pair in enumerate(pairs):
+        instruction = pair.get("instruction", "")
         output = pair.get("output", "")
-        if has_thinking_trace(output):
+        if (
+            has_thinking_trace(output)
+            or has_forbidden_training_token(output)
+            or has_forbidden_training_token(instruction)
+        ):
             bad.append({
                 "index": idx,
+                "instruction_preview": instruction[:300],
                 "output_preview": output[:500],
             })
 
     if bad:
         raise RuntimeError(
-            f"Clean dataset still contains thinking/tool traces in {len(bad)} samples. "
+            f"Clean dataset still contains thinking/control/tool traces in {len(bad)} samples. "
             f"First bad sample: {bad[0]}"
         )
 
