@@ -1897,7 +1897,10 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
 
         if "gemma-4-12b" in model_info.get("hf_id", "").lower():
             install_commands.append(
-                "pip install --upgrade --force-reinstall --no-cache-dir git+https://github.com/huggingface/transformers.git"
+                # Gemma 4 12B Unified checkpoints were authored against the Transformers 5.10
+                # config schema. Pin the latest 5.10 patch: 5.5 predates 12B Unified support,
+                # while development main can introduce incompatible per-layer config APIs.
+                "pip install --upgrade --force-reinstall --no-cache-dir transformers==5.10.4"
             )
         for cmd in install_commands:
             run_ssh_command(
@@ -1968,12 +1971,28 @@ use_cpu: false"""
             print(f"\n    ❌ {result}")
             print(f"    Pod ID: {pod_id}")
             print(f"    Check logs: cat {WORK_DIR}/train.log")
+            try:
+                if ssh:
+                    ssh.close()
+                runpod.terminate_pod(pod_id)
+                print("    ✅ Failed training pod terminated. No more charges.")
+            except Exception as terminate_error:
+                print(f"    ⚠️ Automatic pod termination failed: {terminate_error}")
+                print(f"    ⚠️ Terminate pod {pod_id} manually to stop charges.")
             input("\n    Press Enter to continue...")
             return
 
     except Exception as e:
         print(f"    ❌ Training failed: {e}")
         print(f"    Pod ID: {pod_id}")
+        try:
+            if ssh:
+                ssh.close()
+            runpod.terminate_pod(pod_id)
+            print("    ✅ Failed training pod terminated. No more charges.")
+        except Exception as terminate_error:
+            print(f"    ⚠️ Automatic pod termination failed: {terminate_error}")
+            print(f"    ⚠️ Terminate pod {pod_id} manually to stop charges.")
         input("\n    Press Enter to go back...")
         return
 
