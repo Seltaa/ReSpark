@@ -839,7 +839,14 @@ def generate_training_script(model_info, data_path, hf_token="", hf_repo=""):
 
     # Chat template: model-specific format
     hf_id = model_info.get("hf_id", "")
-    if "qwen" in hf_id.lower():
+    if "gemma" in hf_id.lower():
+        # Gemma instruction checkpoints use their native turn markers.  Do not
+        # let Gemma fall through to the generic <|turn> format: those literal
+        # strings can otherwise be learned and later leak into model replies.
+        turn_user_start = "<start_of_turn>user"
+        turn_end = "<end_of_turn>"
+        turn_model_start = "<start_of_turn>model"
+    elif "qwen" in hf_id.lower():
         turn_user_start = "<|im_start|>user"
         turn_end = "<|im_end|>"
         turn_model_start = "<|im_start|>assistant"
