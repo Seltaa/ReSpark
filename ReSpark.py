@@ -1895,13 +1895,15 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
             # The selected RunPod image currently exposes a CUDA 12.4-era driver.
             # Latest Unsloth may pull Torch CUDA 13 wheels, which makes CUDA vanish.
             # Install Unsloth first, then finish on a known CUDA 12.4-compatible stack.
-            "pip uninstall -y torchaudio torchtext torchvision xformers",
+            "pip uninstall -y torchao torchaudio torchtext torchvision xformers",
             "pip install --upgrade --force-reinstall --no-cache-dir unsloth unsloth_zoo",
-            "pip uninstall -y torchaudio torchtext torchvision xformers",
+            "pip uninstall -y torchao torchaudio torchtext torchvision xformers",
             "pip install --upgrade --force-reinstall --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124",
             "pip install --upgrade --force-reinstall --no-cache-dir --no-deps xformers==0.0.29.post3",
-            "pip install --upgrade trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
-            "pip uninstall -y torchaudio torchtext",
+            "pip install --upgrade trl==0.24.0 peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
+            # torchao currently expects newer PyTorch pytree APIs. It is optional
+            # for this QLoRA path and must stay absent with the CUDA 12.4 stack.
+            "pip uninstall -y torchao torchaudio torchtext",
         ]
 
         if "gemma-4-12b" in model_info.get("hf_id", "").lower():
@@ -1922,12 +1924,17 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
         print("    Verifying CUDA before starting paid training...")
         cuda_preflight_cmd = """python - <<'PY'
 import torch
+import importlib.util
 print('torch:', torch.__version__)
 print('torch CUDA runtime:', torch.version.cuda)
 print('CUDA available:', torch.cuda.is_available())
 if not torch.cuda.is_available():
     raise SystemExit('CUDA preflight failed: PyTorch cannot access the GPU')
+if importlib.util.find_spec('torchao') is not None:
+    raise SystemExit('Compatibility preflight failed: torchao must be absent with Torch 2.6')
 print('GPU:', torch.cuda.get_device_name(0))
+import unsloth
+print('Unsloth import: OK')
 PY"""
         run_ssh_command(
             ssh,
