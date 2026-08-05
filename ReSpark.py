@@ -1892,13 +1892,15 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
         print("    Installing Python packages...")
         install_commands = [
             "pip install --upgrade pip",
-            # RunPod/PyTorch images can carry torchaudio/torchtext builds that no longer match
-            # the torch version installed by Unsloth. Remove them before and after package upgrades.
-            "pip uninstall -y torchaudio torchtext",
+            # The selected RunPod image currently exposes a CUDA 12.4-era driver.
+            # Latest Unsloth may pull Torch CUDA 13 wheels, which makes CUDA vanish.
+            # Install Unsloth first, then finish on a known CUDA 12.4-compatible stack.
+            "pip uninstall -y torchaudio torchtext torchvision xformers",
             "pip install --upgrade --force-reinstall --no-cache-dir unsloth unsloth_zoo",
-            "pip install xformers trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
-            "pip uninstall -y torchaudio torchtext",
-            "pip install torchvision",
+            "pip uninstall -y torchaudio torchtext torchvision xformers",
+            "pip install --upgrade --force-reinstall --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124",
+            "pip install --upgrade --force-reinstall --no-cache-dir --no-deps xformers==0.0.29.post3",
+            "pip install --upgrade trl peft accelerate bitsandbytes datasets huggingface_hub hf_transfer",
             "pip uninstall -y torchaudio torchtext",
         ]
 
@@ -1916,6 +1918,23 @@ def run_finetuning(config, pairs, model_info, source, hf_repo=""):
                 timeout=1800,
                 fail_on_error=True,
             )
+
+        print("    Verifying CUDA before starting paid training...")
+        cuda_preflight_cmd = """python - <<'PY'
+import torch
+print('torch:', torch.__version__)
+print('torch CUDA runtime:', torch.version.cuda)
+print('CUDA available:', torch.cuda.is_available())
+if not torch.cuda.is_available():
+    raise SystemExit('CUDA preflight failed: PyTorch cannot access the GPU')
+print('GPU:', torch.cuda.get_device_name(0))
+PY"""
+        run_ssh_command(
+            ssh,
+            "bash -lc " + shlex.quote(cuda_preflight_cmd),
+            timeout=300,
+            fail_on_error=True,
+        )
 
         print("    Checking installed package versions...")
         version_check_cmd = """python - <<'PY'
